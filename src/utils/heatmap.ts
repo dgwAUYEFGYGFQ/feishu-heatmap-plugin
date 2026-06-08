@@ -103,6 +103,7 @@ export function calculateHeatmap(records: SourceRecord[], config: HeatmapConfig)
   const normalizedRecords = records.map((record) => normalizeRecord(record, config));
   const exceptions: ExceptionRecord[] = [];
   let calculatedRecords = 0;
+  let totalLoad = 0;
 
   for (const record of normalizedRecords) {
     const exception = validateRecord(record);
@@ -119,6 +120,7 @@ export function calculateHeatmap(records: SourceRecord[], config: HeatmapConfig)
 
     calculatedRecords += 1;
     if (!passesFilters(record, config)) continue;
+    totalLoad += record.value;
 
     const dailyValue = record.value / allocationDates.length;
     for (const date of allocationDates) {
@@ -149,6 +151,7 @@ export function calculateHeatmap(records: SourceRecord[], config: HeatmapConfig)
     buckets: Array.from(buckets.values()).sort((a, b) => a.rangeStart.localeCompare(b.rangeStart)),
     summary: {
       totalRecords: records.length,
+      totalLoad: Number(totalLoad.toFixed(4)),
       calculatedRecords,
       exceptionRecords: exceptions,
     },
@@ -170,11 +173,30 @@ export function getFilterOptions(records: SourceRecord[], config: HeatmapConfig)
 }
 
 export function getBucketColor(value: number, stops: HeatmapConfig['colorStops']): string {
-  const matched = stops.find((stop) => value >= stop.min && value <= stop.max);
-  if (matched) return matched.color;
   const sorted = [...stops].sort((a, b) => a.min - b.min);
-  if (!sorted.length || value <= 0) return '#f1f5f9';
-  return value > sorted[sorted.length - 1].max ? sorted[sorted.length - 1].color : '#f1f5f9';
+  const matched = sorted.find((stop) => value >= stop.min && value <= stop.max);
+  if (matched) return matched.color;
+  if (!sorted.length || value <= 0) return '#F5F6F7';
+  return value > sorted[sorted.length - 1].max ? sorted[sorted.length - 1].color : '#F5F6F7';
+}
+
+export function getBucketLevel(value: number, stops: HeatmapConfig['colorStops']): number {
+  if (!value || value <= 0) return 0;
+  const sorted = [...stops].sort((a, b) => a.min - b.min);
+  const index = sorted.findIndex((stop) => value >= stop.min && value <= stop.max);
+  if (index >= 0) return index + 1;
+  return sorted.length && value > sorted[sorted.length - 1].max ? sorted.length : 0;
+}
+
+export function getCellTextColor(level: number): string {
+  return level >= 3 ? '#FFFFFF' : '#1F2329';
+}
+
+export function formatCellValue(value: number): string {
+  if (!value || value === 0) return '';
+  if (value >= 100) return '99+';
+  if (value >= 10) return Math.round(value).toString();
+  return Number(value.toFixed(1)).toString();
 }
 
 export function formatValue(value: number): string {

@@ -44,6 +44,7 @@ export interface HeatmapConfig {
   customEndDate: string;
   colorStops: ColorStop[];
   showLegend: boolean;
+  showCellValue: boolean;
   statusFilters: string[];
   ownerFilters: string[];
   groupFilters: string[];
@@ -86,6 +87,7 @@ export interface ExceptionRecord {
 
 export interface CalculationSummary {
   totalRecords: number;
+  totalLoad: number;
   calculatedRecords: number;
   exceptionRecords: ExceptionRecord[];
 }

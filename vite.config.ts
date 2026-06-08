@@ -10,6 +10,9 @@ export default defineConfig({
   preview: {
     host: '127.0.0.1',
     port: 4173,
-    allowedHosts: ['strongly-binding-helmet-matter.trycloudflare.com'],
+    allowedHosts: [
+      'strongly-binding-helmet-matter.trycloudflare.com',
+      'resolve-berlin-produce-munich.trycloudflare.com',
+    ],
   },
 });

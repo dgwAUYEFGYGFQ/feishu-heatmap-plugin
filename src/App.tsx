@@ -1,5 +1,5 @@
 import dayjs from 'dayjs';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { ConfigPanel } from './components/ConfigPanel';
 import { DetailDrawer } from './components/DetailDrawer';
@@ -18,10 +18,11 @@ import type { CalculationResult, FieldMeta, HeatmapBucket, HeatmapConfig, Source
 import { calculateHeatmap, getFilterOptions } from './utils/heatmap';
 
 const defaultColorStops = [
-  { min: 0.01, max: 2, color: '#d9f99d' },
-  { min: 2.01, max: 5, color: '#86efac' },
-  { min: 5.01, max: 10, color: '#22c55e' },
-  { min: 10.01, max: 9999, color: '#15803d' },
+  { min: 0.01, max: 1, color: '#E6F7F1' },
+  { min: 1.01, max: 2, color: '#BFEBDD' },
+  { min: 2.01, max: 5, color: '#7DD3B0' },
+  { min: 5.01, max: 10, color: '#35B27C' },
+  { min: 10.01, max: 9999, color: '#127A52' },
 ];
 
 function createInitialConfig(tableId = ''): HeatmapConfig {
@@ -44,9 +45,21 @@ function createInitialConfig(tableId = ''): HeatmapConfig {
     customEndDate: dayjs().add(3, 'month').endOf('month').format('YYYY-MM-DD'),
     colorStops: defaultColorStops,
     showLegend: true,
+    showCellValue: false,
     statusFilters: [],
     ownerFilters: [],
     groupFilters: [],
+  };
+}
+
+function normalizeConfig(config: HeatmapConfig): HeatmapConfig {
+  return {
+    ...config,
+    colorStops: config.colorStops?.length >= 5 ? config.colorStops : defaultColorStops,
+    showCellValue: config.showCellValue ?? false,
+    statusFilters: config.statusFilters ?? [],
+    ownerFilters: config.ownerFilters ?? [],
+    groupFilters: config.groupFilters ?? [],
   };
 }
 
@@ -86,11 +99,12 @@ function resetFieldsForTable(config: HeatmapConfig, tableId: string): HeatmapCon
 
 const emptyResult: CalculationResult = {
   buckets: [],
-  summary: { totalRecords: 0, calculatedRecords: 0, exceptionRecords: [] },
+  summary: { totalRecords: 0, totalLoad: 0, calculatedRecords: 0, exceptionRecords: [] },
   filterOptions: { statuses: [], owners: [], groups: [] },
 };
 
 export function App() {
+  const shellRef = useRef<HTMLDivElement>(null);
   const [tables, setTables] = useState<TableMeta[]>([]);
   const [fields, setFields] = useState<FieldMeta[]>([]);
   const [records, setRecords] = useState<SourceRecord[]>([]);
@@ -100,6 +114,7 @@ export function App() {
   const [saving, setSaving] = useState(false);
   const [showConfigPanel, setShowConfigPanel] = useState(() => isDashboardConfigMode());
   const [shellStyle, setShellStyle] = useState<CSSProperties>({});
+  const [shellSize, setShellSize] = useState({ width: 0, height: 0 });
   const [selectedBucket, setSelectedBucket] = useState<HeatmapBucket | undefined>();
   const [showExceptions, setShowExceptions] = useState(false);
 
@@ -115,7 +130,7 @@ export function App() {
       if (cancelled) return;
       setTables(loadedTables);
       const fallbackConfig = createInitialConfig(loadedTables[0]?.id ?? '');
-      const nextConfig = savedConfig?.tableId ? savedConfig : fallbackConfig;
+      const nextConfig = normalizeConfig(savedConfig?.tableId ? savedConfig : fallbackConfig);
       setDraftConfig(nextConfig);
       setAppliedConfig(nextConfig);
       setShowConfigPanel(isDashboardConfigMode() || !savedConfig);
@@ -134,10 +149,21 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    const element = shellRef.current;
+    if (!element) return undefined;
+    const observer = new ResizeObserver(([entry]) => {
+      setShellSize({ width: entry.contentRect.width, height: entry.contentRect.height });
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
     return onDashboardConfigChange((config) => {
       if (!config?.tableId) return;
-      setDraftConfig(config);
-      setAppliedConfig(config);
+      const nextConfig = normalizeConfig(config);
+      setDraftConfig(nextConfig);
+      setAppliedConfig(nextConfig);
       setShowConfigPanel(isDashboardConfigMode());
     });
   }, []);
@@ -215,10 +241,16 @@ export function App() {
     return undefined;
   }, [loading, showConfigPanel, appliedConfig.tableId, result.buckets.length]);
 
+  const densityClass = !showConfigPanel && shellSize.height < 270 ? 'micro' : !showConfigPanel && shellSize.height < 390 ? 'compact' : '';
+
   return (
-    <div className={`app-shell ${showConfigPanel ? '' : 'config-collapsed'}`} style={shellStyle}>
-      <main className="main-panel">
-        <header className="app-header">
+    <div
+      className={`plugin-root app-shell ${showConfigPanel ? '' : 'config-collapsed'} ${densityClass}`}
+      style={shellStyle}
+      ref={shellRef}
+    >
+      <main className="plugin-card main-panel">
+        <header className="plugin-header app-header">
           <div>
             <h1>任务负荷热力图</h1>
             <p>按任务周期分摊数值，查看每日或每周负荷峰值。</p>
@@ -234,7 +266,7 @@ export function App() {
           </div>
         </header>
 
-        <section className="heatmap-card">
+        <section className="plugin-body heatmap-card">
           {loading ? (
             <div className="empty">正在读取多维表格数据...</div>
           ) : result.buckets.length ? (

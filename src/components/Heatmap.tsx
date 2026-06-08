@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import type { HeatmapBucket, HeatmapConfig } from '../types';
-import { formatValue, getBucketColor } from '../utils/heatmap';
+import { formatCellValue, formatValue, getBucketColor, getBucketLevel, getCellTextColor } from '../utils/heatmap';
 import { HeatmapTooltip } from './HeatmapTooltip';
 
 interface HeatmapProps {
@@ -42,21 +42,32 @@ export function Heatmap({ buckets, config, onSelect }: HeatmapProps) {
     const monthCount = Math.max(1, grouped.length);
     const maxBucketsInMonth = Math.max(1, ...grouped.map((group) => group.buckets.length));
     const rows = config.granularity === 'week' ? 4 : 7;
-    const columns = config.granularity === 'week' ? Math.ceil(maxBucketsInMonth / rows) : Math.ceil(maxBucketsInMonth / rows);
-    const horizontalChrome = monthCount * 18 + Math.max(0, monthCount - 1) * 18;
-    const availableWidth = Math.max(220, size.width - horizontalChrome);
-    const availableHeight = Math.max(140, size.height - 72);
+    const columns = Math.ceil(maxBucketsInMonth / rows);
+    const minCellSize = config.granularity === 'week' ? 14 : 10;
+    const maxCellSize = config.granularity === 'week' ? 46 : 28;
+    const defaultCellSize = config.granularity === 'week' ? 28 : 18;
+    const gap = 4;
+    const monthGap = 14;
+    const panelPadding = 24;
+    const labelHeight = 21;
+    const legendHeight = config.showLegend ? 24 : 0;
+    const verticalChrome = panelPadding + labelHeight + legendHeight + 12;
+    const horizontalChrome = panelPadding + Math.max(0, monthCount - 1) * monthGap;
+    const availableWidth = Math.max(0, size.width - horizontalChrome);
+    const availableHeight = Math.max(0, size.height - verticalChrome);
     const byWidth = Math.floor(availableWidth / Math.max(1, monthCount * columns));
     const byHeight = Math.floor(availableHeight / rows);
-    const cellSize = Math.max(config.granularity === 'day' ? 22 : 36, Math.min(config.granularity === 'day' ? 34 : 58, byWidth, byHeight));
-    const gap = Math.max(4, Math.min(8, Math.floor(cellSize / 5)));
+    const rawCellSize = size.width && size.height ? Math.min(byWidth, byHeight) - gap : defaultCellSize;
+    const cellSize = Math.max(minCellSize, Math.min(maxCellSize, rawCellSize || defaultCellSize));
+    const fontSize = cellSize > 22 ? 12 : cellSize >= 16 ? 10 : 0;
     return {
       cellSize,
-      weekCellWidth: Math.max(48, Math.floor(cellSize * 2.2)),
+      weekCellWidth: Math.max(config.showCellValue ? 36 : 24, Math.floor(cellSize * 1.85)),
       gap,
-      fontSize: Math.max(10, Math.min(13, Math.floor(cellSize * 0.45))),
+      fontSize,
+      showInlineValue: config.showCellValue && cellSize >= 16,
     };
-  }, [config.granularity, grouped, size]);
+  }, [config.granularity, config.showCellValue, config.showLegend, grouped, size]);
 
   const activeTooltipKey = locked || hovered;
   const tooltipBucket = activeTooltipKey ? buckets.find((bucket) => bucket.key === activeTooltipKey) : undefined;
@@ -79,37 +90,44 @@ export function Heatmap({ buckets, config, onSelect }: HeatmapProps) {
           <div className="month-group" key={group.month}>
             <div className="month-label">{group.month}</div>
             <div className={`heatmap-grid ${config.granularity === 'week' ? 'week-grid' : ''}`}>
-              {group.buckets.map((bucket) => (
-                <button
-                  key={bucket.key}
-                  type="button"
-                  className="heat-cell"
-                  style={{ backgroundColor: getBucketColor(bucket.value, config.colorStops) }}
-                  onMouseEnter={(event) => {
-                    if (!locked) setHovered(bucket.key);
-                    setTooltipPos({ x: event.clientX, y: event.clientY });
-                  }}
-                  onMouseMove={(event) => {
-                    if (!locked) setTooltipPos({ x: event.clientX, y: event.clientY });
-                  }}
-                  onMouseLeave={() => {
-                    if (!locked) setHovered('');
-                  }}
-                  onFocus={() => {
-                    if (!locked) setHovered(bucket.key);
-                  }}
-                  onBlur={() => {
-                    if (!locked) setHovered('');
-                  }}
-                  onClick={(event) => {
-                    setTooltipPos({ x: event.clientX, y: event.clientY });
-                    setLocked((current) => (current === bucket.key ? '' : bucket.key));
-                  }}
-                  aria-label={`${bucket.label}，热度 ${formatValue(bucket.value)}`}
-                >
-                  {bucket.value > 0 && <span>{formatValue(bucket.value)}</span>}
-                </button>
-              ))}
+              {group.buckets.map((bucket) => {
+                const level = getBucketLevel(bucket.value, config.colorStops);
+                const cellValue = formatCellValue(bucket.value);
+                return (
+                  <button
+                    key={bucket.key}
+                    type="button"
+                    className="heat-cell"
+                    style={{
+                      backgroundColor: getBucketColor(bucket.value, config.colorStops),
+                      color: getCellTextColor(level),
+                    }}
+                    onMouseEnter={(event) => {
+                      if (!locked) setHovered(bucket.key);
+                      setTooltipPos({ x: event.clientX, y: event.clientY });
+                    }}
+                    onMouseMove={(event) => {
+                      if (!locked) setTooltipPos({ x: event.clientX, y: event.clientY });
+                    }}
+                    onMouseLeave={() => {
+                      if (!locked) setHovered('');
+                    }}
+                    onFocus={() => {
+                      if (!locked) setHovered(bucket.key);
+                    }}
+                    onBlur={() => {
+                      if (!locked) setHovered('');
+                    }}
+                    onClick={(event) => {
+                      setTooltipPos({ x: event.clientX, y: event.clientY });
+                      setLocked((current) => (current === bucket.key ? '' : bucket.key));
+                    }}
+                    aria-label={`${bucket.label}，热度 ${formatValue(bucket.value)}`}
+                  >
+                    {cellMetrics.showInlineValue && cellValue && <span>{cellValue}</span>}
+                  </button>
+                );
+              })}
             </div>
           </div>
         ))}

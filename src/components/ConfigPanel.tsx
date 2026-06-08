@@ -208,6 +208,10 @@ export function ConfigPanel({ tables, fields, draftConfig, filterOptions, saving
           <input type="checkbox" checked={draftConfig.showLegend} onChange={(event) => onChange({ showLegend: event.target.checked })} />
           <span>显示图例</span>
         </label>
+        <label className="checkbox">
+          <input type="checkbox" checked={draftConfig.showCellValue} onChange={(event) => onChange({ showCellValue: event.target.checked })} />
+          <span>显示格子数值</span>
+        </label>
       </section>
 
       <section className="panel-section">
