@@ -1,7 +1,8 @@
-export type FieldKind = 'date' | 'number' | 'text' | 'singleSelect' | 'multiSelect' | 'user' | 'other';
+export type FieldKind = 'date' | 'number' | 'text' | 'singleSelect' | 'multiSelect' | 'user' | 'link' | 'formula' | 'other';
 
 export type StatisticMode = 'calendar' | 'workday';
 export type Granularity = 'day' | 'week';
+export type HeatmapType = 'time' | 'matrix';
 
 export interface TableMeta {
   id: string;
@@ -13,11 +14,18 @@ export interface FieldMeta {
   name: string;
   type: unknown;
   kind: FieldKind;
+  property?: Record<string, unknown>;
+  rawMeta?: Record<string, unknown>;
+  options?: Array<{
+    id: string;
+    name: string;
+  }>;
 }
 
 export interface SourceRecord {
   id: string;
   fields: Record<string, unknown>;
+  displayFields?: Record<string, string>;
 }
 
 export interface ColorStop {
@@ -26,7 +34,14 @@ export interface ColorStop {
   color: string;
 }
 
+export interface MatrixDetailFieldConfig {
+  fieldId: string;
+  showInDetail: boolean;
+  enableFilter: boolean;
+}
+
 export interface HeatmapConfig {
+  heatmapType: HeatmapType;
   tableId: string;
   startDateFieldId: string;
   endDateFieldId: string;
@@ -46,6 +61,15 @@ export interface HeatmapConfig {
   showLegend: boolean;
   showCellValue: boolean;
   showQuickFilters: boolean;
+  matrixRowGroupFieldId?: string;
+  matrixRowNameFieldId?: string;
+  matrixColumnFieldId?: string;
+  matrixDelayedStatusValues: string[];
+  matrixStartDateFieldId?: string;
+  matrixEndDateFieldId?: string;
+  matrixDetailFields: MatrixDetailFieldConfig[];
+  matrixShowEmptyCells: boolean;
+  matrixShowCellCount: boolean;
   statusFilters: string[];
   ownerFilters: string[];
   groupFilters: string[];
@@ -100,5 +124,57 @@ export interface CalculationResult {
     statuses: string[];
     owners: string[];
     groups: string[];
+  };
+}
+
+export interface MatrixRecordDetail {
+  id: string;
+  title: string;
+  status: string;
+  owner: string;
+  startDate: string;
+  endDate: string;
+  delayed: boolean;
+  detailFields: Array<{
+    fieldId: string;
+    fieldName: string;
+    value: string;
+  }>;
+  raw: SourceRecord;
+}
+
+export interface MatrixCell {
+  key: string;
+  rowKey: string;
+  rowName: string;
+  rowGroup?: string;
+  columnKey: string;
+  columnName: string;
+  totalCount: number;
+  delayedCount: number;
+  normalCount: number;
+  status: 'empty' | 'normal' | 'delayed';
+  records: MatrixRecordDetail[];
+}
+
+export interface MatrixRow {
+  key: string;
+  name: string;
+  group?: string;
+}
+
+export interface MatrixColumn {
+  key: string;
+  name: string;
+}
+
+export interface MatrixHeatmapData {
+  rows: MatrixRow[];
+  columns: MatrixColumn[];
+  cells: MatrixCell[];
+  summary: {
+    totalTasks: number;
+    delayedTasks: number;
+    activeCells: number;
   };
 }

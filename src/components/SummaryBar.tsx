@@ -5,10 +5,36 @@ import { formatValue } from '../utils/heatmap';
 interface SummaryBarProps {
   summary: CalculationSummary;
   onShowExceptions: () => void;
+  variant?: 'time' | 'matrix';
+  matrixSummary?: {
+    totalTasks: number;
+    delayedTasks: number;
+    activeCells: number;
+  };
 }
 
-export function SummaryBar({ summary, onShowExceptions }: SummaryBarProps) {
+export function SummaryBar({ summary, onShowExceptions, variant = 'time', matrixSummary }: SummaryBarProps) {
   const exceptionCount = summary.exceptionRecords.length;
+
+  if (variant === 'matrix' && matrixSummary) {
+    return (
+      <div className="summary-bar">
+        <div className="summary-item">
+          <span>总任务</span>
+          <strong>{matrixSummary.totalTasks} 条</strong>
+        </div>
+        <button className="summary-item exception-button has-exception" type="button" onClick={onShowExceptions}>
+          <AlertTriangle size={14} />
+          <span>延期任务</span>
+          <strong>{matrixSummary.delayedTasks} 条</strong>
+        </button>
+        <div className="summary-item">
+          <span>覆盖格子</span>
+          <strong>{matrixSummary.activeCells} 个</strong>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="summary-bar">

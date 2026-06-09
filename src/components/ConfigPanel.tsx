@@ -1,4 +1,5 @@
 import type { FieldKind, FieldMeta, HeatmapConfig, TableMeta } from '../types';
+import type { QuickFilters } from '../utils/quickFilters';
 
 interface ConfigPanelProps {
   tables: TableMeta[];
@@ -8,9 +9,16 @@ interface ConfigPanelProps {
     statuses: string[];
     owners: string[];
     groups: string[];
+    matrixFilters?: Array<{
+      fieldId: string;
+      fieldName: string;
+      options: string[];
+    }>;
   };
+  quickFilters: QuickFilters;
   saving: boolean;
   onChange: (patch: Partial<HeatmapConfig>) => void;
+  onQuickFilterChange: (fieldId: string, values: string[]) => void;
   onApply: () => void;
 }
 
@@ -92,16 +100,43 @@ function CheckboxFilter({
   );
 }
 
-export function ConfigPanel({ tables, fields, draftConfig, filterOptions, saving, onChange, onApply }: ConfigPanelProps) {
+export function ConfigPanel({ tables, fields, draftConfig, filterOptions, quickFilters, saving, onChange, onQuickFilterChange, onApply }: ConfigPanelProps) {
   const dateFields = optionFields(fields, ['date']);
   const numberFields = optionFields(fields, ['number']);
   const valueFields = numberFields.length ? numberFields : fields;
+  const isMatrix = draftConfig.heatmapType === 'matrix';
+  const matrixDetailFields = draftConfig.matrixDetailFields ?? [];
+  const addedDetailFieldIds = new Set(matrixDetailFields.map((item) => item.fieldId));
+  const availableDetailFields = fields.filter((field) => !addedDetailFieldIds.has(field.id));
+  const fieldNameOf = (fieldId: string) => fields.find((field) => field.id === fieldId)?.name ?? '未知字段';
+  const updateMatrixDetailField = (index: number, patch: Partial<(typeof matrixDetailFields)[number]>) => {
+    onChange({
+      matrixDetailFields: matrixDetailFields.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)),
+    });
+  };
+  const moveMatrixDetailField = (index: number, direction: -1 | 1) => {
+    const nextIndex = index + direction;
+    if (nextIndex < 0 || nextIndex >= matrixDetailFields.length) return;
+    const nextFields = [...matrixDetailFields];
+    [nextFields[index], nextFields[nextIndex]] = [nextFields[nextIndex], nextFields[index]];
+    onChange({ matrixDetailFields: nextFields });
+  };
+  const removeMatrixDetailField = (index: number) => {
+    onChange({ matrixDetailFields: matrixDetailFields.filter((_, itemIndex) => itemIndex !== index) });
+  };
 
   return (
     <aside className="config-panel">
       <div className="panel-title">配置</div>
 
       <section className="panel-section">
+        <label className="field">
+          <span>热力图类型</span>
+          <select value={draftConfig.heatmapType} onChange={(event) => onChange({ heatmapType: event.target.value as HeatmapConfig['heatmapType'] })}>
+            <option value="time">时间负荷热力图</option>
+            <option value="matrix">矩阵状态热力图</option>
+          </select>
+        </label>
         <label className="field">
           <span>数据表</span>
           <select value={draftConfig.tableId} onChange={(event) => onChange({ tableId: event.target.value })}>
@@ -115,19 +150,108 @@ export function ConfigPanel({ tables, fields, draftConfig, filterOptions, saving
         <div className="field-hint">
           已读取 {fields.length} 个字段，其中日期字段 {dateFields.length} 个，数字字段 {numberFields.length} 个
         </div>
-        <SelectField label="开始日期字段" value={draftConfig.startDateFieldId} options={dateFields} onChange={(value) => onChange({ startDateFieldId: value })} />
-        <SelectField label="结束日期字段" value={draftConfig.endDateFieldId} options={dateFields} onChange={(value) => onChange({ endDateFieldId: value })} />
-        <SelectField label="计算字段" value={draftConfig.valueFieldId} options={valueFields} onChange={(value) => onChange({ valueFieldId: value })} />
-        {!numberFields.length && fields.length > 0 && (
-          <div className="field-hint warn">未识别到数字字段，计算字段暂时显示全部字段；请选择可转成数字的字段。</div>
+        {!isMatrix && (
+          <>
+            <SelectField label="开始日期字段" value={draftConfig.startDateFieldId} options={dateFields} onChange={(value) => onChange({ startDateFieldId: value })} />
+            <SelectField label="结束日期字段" value={draftConfig.endDateFieldId} options={dateFields} onChange={(value) => onChange({ endDateFieldId: value })} />
+            <SelectField label="计算字段" value={draftConfig.valueFieldId} options={valueFields} onChange={(value) => onChange({ valueFieldId: value })} />
+            {!numberFields.length && fields.length > 0 && (
+              <div className="field-hint warn">未识别到数字字段，计算字段暂时显示全部字段；请选择可转成数字的字段。</div>
+            )}
+            <SelectField label="标题字段" value={draftConfig.titleFieldId} options={fields} optional onChange={(value) => onChange({ titleFieldId: value || undefined })} />
+            <SelectField label="状态字段" value={draftConfig.statusFieldId} options={fields} optional onChange={(value) => onChange({ statusFieldId: value || undefined })} />
+            <SelectField label="负责人字段" value={draftConfig.ownerFieldId} options={fields} optional onChange={(value) => onChange({ ownerFieldId: value || undefined })} />
+            <SelectField label="分组字段" value={draftConfig.groupFieldId} options={fields} optional onChange={(value) => onChange({ groupFieldId: value || undefined })} />
+          </>
         )}
-        <SelectField label="标题字段" value={draftConfig.titleFieldId} options={fields} optional onChange={(value) => onChange({ titleFieldId: value || undefined })} />
-        <SelectField label="状态字段" value={draftConfig.statusFieldId} options={fields} optional onChange={(value) => onChange({ statusFieldId: value || undefined })} />
-        <SelectField label="负责人字段" value={draftConfig.ownerFieldId} options={fields} optional onChange={(value) => onChange({ ownerFieldId: value || undefined })} />
-        <SelectField label="分组字段" value={draftConfig.groupFieldId} options={fields} optional onChange={(value) => onChange({ groupFieldId: value || undefined })} />
       </section>
 
-      <section className="panel-section">
+      {isMatrix && (
+        <>
+          <section className="panel-section">
+            <div className="section-label">矩阵结构</div>
+            <SelectField label="行分组字段" value={draftConfig.matrixRowGroupFieldId} options={fields} optional onChange={(value) => onChange({ matrixRowGroupFieldId: value || undefined })} />
+            <SelectField label="行名称字段" value={draftConfig.matrixRowNameFieldId} options={fields} onChange={(value) => onChange({ matrixRowNameFieldId: value })} />
+            <SelectField label="列维度字段" value={draftConfig.matrixColumnFieldId} options={fields} onChange={(value) => onChange({ matrixColumnFieldId: value })} />
+          </section>
+
+          <section className="panel-section">
+            <div className="section-label">状态规则</div>
+            <SelectField label="状态字段" value={draftConfig.statusFieldId} options={fields} onChange={(value) => onChange({ statusFieldId: value })} />
+            <CheckboxFilter
+              label="延期状态值"
+              values={draftConfig.matrixDelayedStatusValues}
+              options={filterOptions.statuses}
+              emptyText={draftConfig.statusFieldId ? '当前状态字段没有可选值' : '请先选择状态字段'}
+              onChange={(matrixDelayedStatusValues) => onChange({ matrixDelayedStatusValues })}
+            />
+          </section>
+
+          <section className="panel-section">
+            <div className="section-label">明细字段</div>
+            <div className="field-hint">添加到这里的字段会用于格子明细展示；勾选“用作筛选”后，会自动出现在筛选区。</div>
+            <div className="matrix-detail-list">
+              {matrixDetailFields.map((item, index) => (
+                <div className="matrix-detail-row" key={`${item.fieldId}-${index}`}>
+                  <select
+                    value={item.fieldId}
+                    onChange={(event) => {
+                      const nextFieldId = event.target.value;
+                      if (!nextFieldId || addedDetailFieldIds.has(nextFieldId)) return;
+                      updateMatrixDetailField(index, { fieldId: nextFieldId });
+                    }}
+                  >
+                    <option value={item.fieldId}>{fieldNameOf(item.fieldId)}</option>
+                    {availableDetailFields.map((field) => (
+                      <option key={field.id} value={field.id}>
+                        {field.name}
+                      </option>
+                    ))}
+                  </select>
+                  <label>
+                    <input type="checkbox" checked={item.showInDetail} onChange={(event) => updateMatrixDetailField(index, { showInDetail: event.target.checked })} />
+                    <span>明细展示</span>
+                  </label>
+                  <label>
+                    <input type="checkbox" checked={item.enableFilter} onChange={(event) => updateMatrixDetailField(index, { enableFilter: event.target.checked })} />
+                    <span>用作筛选</span>
+                  </label>
+                  <div className="matrix-detail-actions">
+                    <button type="button" disabled={index === 0} onClick={() => moveMatrixDetailField(index, -1)}>上移</button>
+                    <button type="button" disabled={index === matrixDetailFields.length - 1} onClick={() => moveMatrixDetailField(index, 1)}>下移</button>
+                    <button type="button" onClick={() => removeMatrixDetailField(index)}>删除</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <label className="field">
+              <span>添加字段</span>
+              <select
+                value=""
+                onChange={(event) => {
+                  const fieldId = event.target.value;
+                  if (!fieldId) return;
+                  onChange({
+                    matrixDetailFields: [
+                      ...matrixDetailFields,
+                      { fieldId, showInDetail: true, enableFilter: true },
+                    ],
+                  });
+                }}
+              >
+                <option value="">请选择要添加的字段</option>
+                {availableDetailFields.map((field) => (
+                  <option key={field.id} value={field.id}>
+                    {field.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </section>
+        </>
+      )}
+
+      {!isMatrix && <section className="panel-section">
         <label className="field">
           <span>日期统计方式</span>
           <select value={draftConfig.statisticMode} onChange={(event) => onChange({ statisticMode: event.target.value as HeatmapConfig['statisticMode'] })}>
@@ -142,9 +266,9 @@ export function ConfigPanel({ tables, fields, draftConfig, filterOptions, saving
             <option value="week">按周</option>
           </select>
         </label>
-      </section>
+      </section>}
 
-      <section className="panel-section">
+      {!isMatrix && <section className="panel-section">
         <label className="field">
           <span>显示范围</span>
           <select value={draftConfig.rangeMode} onChange={(event) => onChange({ rangeMode: event.target.value as HeatmapConfig['rangeMode'] })}>
@@ -181,9 +305,10 @@ export function ConfigPanel({ tables, fields, draftConfig, filterOptions, saving
             </label>
           </>
         )}
-      </section>
+      </section>}
 
-      <section className="panel-section">
+      {!isMatrix && <section className="panel-section">
+        <div className="section-label">显示设置</div>
         <div className="section-label">颜色区间</div>
         {draftConfig.colorStops.map((stop, index) => (
           <div className="color-row" key={`${stop.color}-${index}`}>
@@ -216,31 +341,69 @@ export function ConfigPanel({ tables, fields, draftConfig, filterOptions, saving
           <input type="checkbox" checked={draftConfig.showQuickFilters} onChange={(event) => onChange({ showQuickFilters: event.target.checked })} />
           <span>显示快捷筛选栏</span>
         </label>
-      </section>
+      </section>}
 
-      <section className="panel-section">
-        <CheckboxFilter
-          label="状态筛选"
-          values={draftConfig.statusFilters}
-          options={filterOptions.statuses}
-          emptyText={draftConfig.statusFieldId ? '当前字段没有可筛选值' : '请先选择状态字段'}
-          onChange={(statusFilters) => onChange({ statusFilters })}
-        />
-        <CheckboxFilter
-          label="负责人筛选"
-          values={draftConfig.ownerFilters}
-          options={filterOptions.owners}
-          emptyText={draftConfig.ownerFieldId ? '当前字段没有可筛选值' : '请先选择负责人字段'}
-          onChange={(ownerFilters) => onChange({ ownerFilters })}
-        />
-        <CheckboxFilter
-          label="分组筛选"
-          values={draftConfig.groupFilters}
-          options={filterOptions.groups}
-          emptyText={draftConfig.groupFieldId ? '当前字段没有可筛选值' : '请先选择分组字段'}
-          onChange={(groupFilters) => onChange({ groupFilters })}
-        />
-      </section>
+      {isMatrix && (
+        <section className="panel-section">
+          <div className="section-label">显示设置</div>
+          <label className="checkbox">
+            <input type="checkbox" checked={draftConfig.matrixShowEmptyCells} onChange={(event) => onChange({ matrixShowEmptyCells: event.target.checked })} />
+            <span>显示空白格子</span>
+          </label>
+          <label className="checkbox">
+            <input type="checkbox" checked={draftConfig.matrixShowCellCount} onChange={(event) => onChange({ matrixShowCellCount: event.target.checked })} />
+            <span>显示格子任务数</span>
+          </label>
+          <label className="checkbox">
+            <input type="checkbox" checked={draftConfig.showQuickFilters} onChange={(event) => onChange({ showQuickFilters: event.target.checked })} />
+            <span>显示快捷筛选栏</span>
+          </label>
+        </section>
+      )}
+
+      {isMatrix ? (
+        <section className="panel-section">
+          <div className="section-label">筛选设置</div>
+          {filterOptions.matrixFilters?.length ? (
+            filterOptions.matrixFilters.map((filter) => (
+              <CheckboxFilter
+                key={filter.fieldId}
+                label={`${filter.fieldName}筛选`}
+                values={quickFilters[filter.fieldId] ?? []}
+                options={filter.options}
+                emptyText="当前字段没有可筛选值"
+                onChange={(values) => onQuickFilterChange(filter.fieldId, values)}
+              />
+            ))
+          ) : (
+            <div className="filter-empty">请在明细字段中勾选“用作筛选”</div>
+          )}
+        </section>
+      ) : (
+        <section className="panel-section">
+          <CheckboxFilter
+            label="状态筛选"
+            values={draftConfig.statusFilters}
+            options={filterOptions.statuses}
+            emptyText={draftConfig.statusFieldId ? '当前字段没有可筛选值' : '请先选择状态字段'}
+            onChange={(statusFilters) => onChange({ statusFilters })}
+          />
+          <CheckboxFilter
+            label="负责人筛选"
+            values={draftConfig.ownerFilters}
+            options={filterOptions.owners}
+            emptyText={draftConfig.ownerFieldId ? '当前字段没有可筛选值' : '请先选择负责人字段'}
+            onChange={(ownerFilters) => onChange({ ownerFilters })}
+          />
+          <CheckboxFilter
+            label="分组筛选"
+            values={draftConfig.groupFilters}
+            options={filterOptions.groups}
+            emptyText={draftConfig.groupFieldId ? '当前字段没有可筛选值' : '请先选择分组字段'}
+            onChange={(groupFilters) => onChange({ groupFilters })}
+          />
+        </section>
+      )}
 
       <button className="apply-button" type="button" onClick={onApply} disabled={saving}>
         {saving ? '保存中...' : '保存并应用'}

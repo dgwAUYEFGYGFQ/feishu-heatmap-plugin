@@ -35,13 +35,15 @@ export function QuickFilterBar({ fields, records, config, quickFilters, onChange
 
   const fieldMap = useMemo(() => new Map(fields.map((field) => [field.id, field])), [fields]);
   const filterItems = useMemo<FilterItem[]>(() => {
-    const configs = [config.statusFieldId, config.ownerFieldId, config.groupFieldId].filter(Boolean) as string[];
+    const configs = config.heatmapType === 'matrix'
+      ? (config.matrixDetailFields ?? []).filter((item) => item.enableFilter).map((item) => item.fieldId)
+      : ([config.statusFieldId, config.ownerFieldId, config.groupFieldId].filter(Boolean) as string[]);
     const uniqueFieldIds = Array.from(new Set(configs));
     return uniqueFieldIds
       .map((fieldId) => {
         const field = fieldMap.get(fieldId);
         if (!field) return null;
-        const options = extractQuickFilterOptions(records, fieldId);
+        const options = extractQuickFilterOptions(records, fieldId, fields);
         if (!options.length) return null;
         return {
           fieldId,
@@ -51,7 +53,7 @@ export function QuickFilterBar({ fields, records, config, quickFilters, onChange
         };
       })
       .filter(Boolean) as FilterItem[];
-  }, [config.groupFieldId, config.ownerFieldId, config.statusFieldId, fieldMap, quickFilters, records]);
+  }, [config.groupFieldId, config.heatmapType, config.matrixDetailFields, config.ownerFieldId, config.statusFieldId, fieldMap, fields, quickFilters, records]);
 
   const activeItem = filterItems.find((item) => item.fieldId === openFieldId);
   const visibleOptions = useMemo(() => {

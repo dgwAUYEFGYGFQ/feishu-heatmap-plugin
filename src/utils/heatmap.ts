@@ -5,24 +5,29 @@ import type {
   ExceptionRecord,
   HeatmapBucket,
   HeatmapConfig,
+  FieldMeta,
   NormalizedRecord,
   SourceRecord,
 } from '../types';
 import { buildDayRange, expandDateRange, getWeekRange, resolveDisplayRange, toDateString } from './date';
-import { uniqueSorted, valueToNumber, valueToText } from './value';
+import { getFieldDisplayValues, normalizeDisplayValue, uniqueSorted, valueToNumber, valueToText } from './value';
 
-function normalizeRecord(record: SourceRecord, config: HeatmapConfig): NormalizedRecord {
+function fieldOf(fields: FieldMeta[], fieldId?: string): FieldMeta | undefined {
+  return fields.find((field) => field.id === fieldId);
+}
+
+function normalizeRecord(record: SourceRecord, config: HeatmapConfig, fields: FieldMeta[] = []): NormalizedRecord {
   const startDate = toDateString(record.fields[config.startDateFieldId]);
   const endValue = toDateString(record.fields[config.endDateFieldId]);
   return {
     id: record.id,
-    title: config.titleFieldId ? valueToText(record.fields[config.titleFieldId]) || record.id : record.id,
+    title: config.titleFieldId ? normalizeDisplayValue(record.fields[config.titleFieldId], fieldOf(fields, config.titleFieldId)) || record.id : record.id,
     startDate,
     endDate: endValue || startDate,
     value: valueToNumber(record.fields[config.valueFieldId]),
-    status: config.statusFieldId ? valueToText(record.fields[config.statusFieldId]) : '',
-    owner: config.ownerFieldId ? valueToText(record.fields[config.ownerFieldId]) : '',
-    group: config.groupFieldId ? valueToText(record.fields[config.groupFieldId]) : '',
+    status: config.statusFieldId ? getFieldDisplayValues(record, fieldOf(fields, config.statusFieldId)).join('、') : '',
+    owner: config.ownerFieldId ? getFieldDisplayValues(record, fieldOf(fields, config.ownerFieldId)).join('、') : '',
+    group: config.groupFieldId ? getFieldDisplayValues(record, fieldOf(fields, config.groupFieldId)).join('、') : '',
     raw: record,
   };
 }
@@ -93,14 +98,14 @@ function addDetail(bucket: HeatmapBucket, detail: AllocationDetail): void {
   }
 }
 
-export function calculateHeatmap(records: SourceRecord[], config: HeatmapConfig): CalculationResult {
+export function calculateHeatmap(records: SourceRecord[], config: HeatmapConfig, fields: FieldMeta[] = []): CalculationResult {
   const displayRange = resolveDisplayRange(config);
   const buckets =
     config.granularity === 'day'
       ? createEmptyDayBuckets(displayRange.startDate, displayRange.endDate)
       : createEmptyWeekBuckets(displayRange.startDate, displayRange.endDate);
 
-  const normalizedRecords = records.map((record) => normalizeRecord(record, config));
+  const normalizedRecords = records.map((record) => normalizeRecord(record, config, fields));
   const exceptions: ExceptionRecord[] = [];
   let calculatedRecords = 0;
   let totalLoad = 0;
@@ -163,8 +168,8 @@ export function calculateHeatmap(records: SourceRecord[], config: HeatmapConfig)
   };
 }
 
-export function getFilterOptions(records: SourceRecord[], config: HeatmapConfig): CalculationResult['filterOptions'] {
-  const normalizedRecords = records.map((record) => normalizeRecord(record, config));
+export function getFilterOptions(records: SourceRecord[], config: HeatmapConfig, fields: FieldMeta[] = []): CalculationResult['filterOptions'] {
+  const normalizedRecords = records.map((record) => normalizeRecord(record, config, fields));
   return {
     statuses: uniqueSorted(normalizedRecords.map((record) => record.status)),
     owners: uniqueSorted(normalizedRecords.map((record) => record.owner)),
