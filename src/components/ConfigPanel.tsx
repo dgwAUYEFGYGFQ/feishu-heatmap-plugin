@@ -212,6 +212,10 @@ export function ConfigPanel({ tables, fields, draftConfig, filterOptions, saving
           <input type="checkbox" checked={draftConfig.showCellValue} onChange={(event) => onChange({ showCellValue: event.target.checked })} />
           <span>显示格子数值</span>
         </label>
+        <label className="checkbox">
+          <input type="checkbox" checked={draftConfig.showQuickFilters} onChange={(event) => onChange({ showQuickFilters: event.target.checked })} />
+          <span>显示快捷筛选栏</span>
+        </label>
       </section>
 
       <section className="panel-section">

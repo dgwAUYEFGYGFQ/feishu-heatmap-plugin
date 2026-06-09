@@ -258,6 +258,161 @@ select {
   color: #6b7280;
 }
 
+.quick-filter-bar {
+  position: relative;
+  z-index: 5;
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: -4px 0 12px;
+}
+
+.quick-filter-label {
+  color: #646a73;
+  font-size: 13px;
+}
+
+.quick-filter-item {
+  position: relative;
+  display: inline-flex;
+}
+
+.filter-chip {
+  display: inline-flex;
+  height: 28px;
+  align-items: center;
+  gap: 4px;
+  padding: 0 10px;
+  border: 1px solid #DEE0E3;
+  border-radius: 6px;
+  background: #fff;
+  color: #1F2329;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.filter-chip:hover {
+  background: #F5F6F7;
+}
+
+.filter-chip.active {
+  border-color: #BACEFD;
+  background: #F0F4FF;
+  color: #1456F0;
+}
+
+.filter-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 20;
+  width: 260px;
+  padding: 12px;
+  border: 1px solid #DEE0E3;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(31, 35, 41, 0.12);
+}
+
+.filter-popover-title {
+  margin-bottom: 8px;
+  color: #1F2329;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.filter-search {
+  width: 100%;
+  height: 32px;
+  margin-bottom: 8px;
+  border: 1px solid #DEE0E3;
+  border-radius: 6px;
+  background: #fff;
+  padding: 0 8px;
+  color: #1F2329;
+  font-size: 13px;
+}
+
+.filter-popover-options {
+  display: grid;
+  gap: 2px;
+  max-height: 190px;
+  overflow: auto;
+}
+
+.filter-popover-option {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-height: 28px;
+  border-radius: 4px;
+  padding: 3px 4px;
+  color: #1F2329;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.filter-popover-option:hover {
+  background: #F5F6F7;
+}
+
+.filter-popover-option span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.filter-popover-empty {
+  padding: 12px 4px;
+  color: #8F959E;
+  font-size: 13px;
+  text-align: center;
+}
+
+.filter-popover-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.filter-popover-actions button {
+  height: 28px;
+  border: 1px solid #DEE0E3;
+  border-radius: 6px;
+  background: #fff;
+  color: #1F2329;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0 12px;
+}
+
+.filter-popover-actions button.primary {
+  border-color: #3370FF;
+  background: #3370FF;
+  color: #fff;
+}
+
+.clear-filter {
+  height: 28px;
+  border: 0;
+  background: transparent;
+  color: #646A73;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0 4px;
+}
+
+.clear-filter:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
 .summary-bar {
   display: flex;
   gap: 6px;
@@ -345,10 +500,12 @@ select {
 
 .heatmap-scroll {
   display: flex;
-  gap: 14px;
+  gap: var(--heat-month-gap, 16px);
   align-items: flex-start;
   flex: 1 1 auto;
   min-height: 0;
+  width: 100%;
+  height: 100%;
   max-width: 100%;
   border: 1px solid #E5E6EB;
   border-radius: 8px;
@@ -357,13 +514,21 @@ select {
   padding: 12px;
 }
 
+.heatmap-scroll.is-centered-x {
+  justify-content: center;
+}
+
+.heatmap-scroll.is-centered-y {
+  align-items: center;
+}
+
 .app-shell.config-collapsed.compact .heatmap-scroll {
-  gap: 10px;
+  gap: var(--heat-month-gap, 16px);
   padding-bottom: 6px;
 }
 
 .app-shell.config-collapsed.micro .heatmap-scroll {
-  gap: 8px;
+  gap: var(--heat-month-gap, 16px);
   padding-bottom: 4px;
 }
 
@@ -372,20 +537,20 @@ select {
 }
 
 .month-label {
-  height: 21px;
+  height: var(--heat-month-title-height, 21px);
   color: #4E5969;
-  font-size: 13px;
+  font-size: var(--heat-month-font-size, 13px);
   font-weight: 600;
 }
 
 .app-shell.config-collapsed.compact .month-label {
-  height: 18px;
-  font-size: 12px;
+  height: var(--heat-month-title-height, 21px);
+  font-size: var(--heat-month-font-size, 13px);
 }
 
 .app-shell.config-collapsed.micro .month-label {
-  height: 16px;
-  font-size: 11px;
+  height: var(--heat-month-title-height, 21px);
+  font-size: var(--heat-month-font-size, 13px);
 }
 
 .heatmap-grid {

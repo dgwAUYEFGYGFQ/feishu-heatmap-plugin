@@ -4,6 +4,7 @@ import type { CSSProperties } from 'react';
 import { ConfigPanel } from './components/ConfigPanel';
 import { DetailDrawer } from './components/DetailDrawer';
 import { Heatmap } from './components/Heatmap';
+import { QuickFilterBar } from './components/QuickFilterBar';
 import { SummaryBar } from './components/SummaryBar';
 import { loadFields, loadRecords, loadTables } from './sdk/bitable';
 import {
@@ -16,6 +17,8 @@ import {
 } from './sdk/dashboard';
 import type { CalculationResult, FieldMeta, HeatmapBucket, HeatmapConfig, SourceRecord, TableMeta } from './types';
 import { calculateHeatmap, getFilterOptions } from './utils/heatmap';
+import type { QuickFilters } from './utils/quickFilters';
+import { filterRecordsByQuickFilters } from './utils/quickFilters';
 
 const defaultColorStops = [
   { min: 0.01, max: 1, color: '#E6F7F1' },
@@ -46,6 +49,7 @@ function createInitialConfig(tableId = ''): HeatmapConfig {
     colorStops: defaultColorStops,
     showLegend: true,
     showCellValue: false,
+    showQuickFilters: false,
     statusFilters: [],
     ownerFilters: [],
     groupFilters: [],
@@ -57,6 +61,7 @@ function normalizeConfig(config: HeatmapConfig): HeatmapConfig {
     ...config,
     colorStops: config.colorStops?.length >= 5 ? config.colorStops : defaultColorStops,
     showCellValue: config.showCellValue ?? false,
+    showQuickFilters: config.showQuickFilters ?? false,
     statusFilters: config.statusFilters ?? [],
     ownerFilters: config.ownerFilters ?? [],
     groupFilters: config.groupFilters ?? [],
@@ -109,7 +114,8 @@ export function App() {
   const [fields, setFields] = useState<FieldMeta[]>([]);
   const [records, setRecords] = useState<SourceRecord[]>([]);
   const [draftConfig, setDraftConfig] = useState<HeatmapConfig>(() => createInitialConfig());
-  const [appliedConfig, setAppliedConfig] = useState<HeatmapConfig>(() => createInitialConfig());
+  const [savedConfig, setSavedConfig] = useState<HeatmapConfig>(() => createInitialConfig());
+  const [quickFilters, setQuickFilters] = useState<QuickFilters>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [showConfigPanel, setShowConfigPanel] = useState(() => isDashboardConfigMode());
@@ -117,6 +123,7 @@ export function App() {
   const [shellSize, setShellSize] = useState({ width: 0, height: 0 });
   const [selectedBucket, setSelectedBucket] = useState<HeatmapBucket | undefined>();
   const [showExceptions, setShowExceptions] = useState(false);
+  const [tooltipResetSignal, setTooltipResetSignal] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -132,7 +139,7 @@ export function App() {
       const fallbackConfig = createInitialConfig(loadedTables[0]?.id ?? '');
       const nextConfig = normalizeConfig(savedConfig?.tableId ? savedConfig : fallbackConfig);
       setDraftConfig(nextConfig);
-      setAppliedConfig(nextConfig);
+      setSavedConfig(nextConfig);
       setShowConfigPanel(isDashboardConfigMode() || !savedConfig);
       if (theme) {
         setShellStyle({
@@ -163,7 +170,7 @@ export function App() {
       if (!config?.tableId) return;
       const nextConfig = normalizeConfig(config);
       setDraftConfig(nextConfig);
-      setAppliedConfig(nextConfig);
+      setSavedConfig(nextConfig);
       setShowConfigPanel(isDashboardConfigMode());
     });
   }, []);
@@ -184,7 +191,6 @@ export function App() {
       setFields(loadedFields);
       setRecords(loadedRecords);
       setDraftConfig(inferred);
-      setAppliedConfig((current) => (current.tableId === tableId ? inferConfig(loadedFields, current) : inferred));
       setLoading(false);
     }
     void loadTableData();
@@ -193,21 +199,13 @@ export function App() {
     };
   }, [draftConfig.tableId]);
 
-  const result = useMemo(() => {
-    if (!appliedConfig.startDateFieldId || !appliedConfig.endDateFieldId || !appliedConfig.valueFieldId) {
-      return emptyResult;
-    }
-    return calculateHeatmap(records, appliedConfig);
-  }, [records, appliedConfig]);
-
-  const draftFilterOptions = useMemo(
-    () => getFilterOptions(records, draftConfig),
-    [records, draftConfig.statusFieldId, draftConfig.ownerFieldId, draftConfig.groupFieldId],
-  );
-
   const changeDraft = (patch: Partial<HeatmapConfig>) => {
+    setTooltipResetSignal((value) => value + 1);
+    setSelectedBucket(undefined);
+    setShowExceptions(false);
     setDraftConfig((current) => {
       if (patch.tableId && patch.tableId !== current.tableId) {
+        setQuickFilters({});
         return resetFieldsForTable(current, patch.tableId);
       }
       const statusFieldChanged = Object.prototype.hasOwnProperty.call(patch, 'statusFieldId');
@@ -223,23 +221,51 @@ export function App() {
     });
   };
 
+  useEffect(() => {
+    const activeFieldIds = new Set(
+      [draftConfig.statusFieldId, draftConfig.ownerFieldId, draftConfig.groupFieldId].filter(Boolean) as string[],
+    );
+    setQuickFilters((current) =>
+      Object.fromEntries(Object.entries(current).filter(([fieldId]) => activeFieldIds.has(fieldId))),
+    );
+  }, [draftConfig.statusFieldId, draftConfig.ownerFieldId, draftConfig.groupFieldId]);
+
+  const quickFilteredRecords = useMemo(
+    () => filterRecordsByQuickFilters(records, quickFilters),
+    [records, quickFilters],
+  );
+
+  const previewRecords = draftConfig.showQuickFilters ? quickFilteredRecords : records;
+
+  const result = useMemo(() => {
+    if (!draftConfig.tableId || !draftConfig.startDateFieldId || !draftConfig.endDateFieldId || !draftConfig.valueFieldId) {
+      return emptyResult;
+    }
+    return calculateHeatmap(previewRecords, draftConfig);
+  }, [previewRecords, draftConfig]);
+
+  const draftFilterOptions = useMemo(
+    () => getFilterOptions(records, draftConfig),
+    [records, draftConfig.statusFieldId, draftConfig.ownerFieldId, draftConfig.groupFieldId],
+  );
+
   const applyAndSave = async () => {
     setSaving(true);
-    setAppliedConfig(draftConfig);
     await saveDashboardConfig(draftConfig);
+    setSavedConfig(draftConfig);
     setShowConfigPanel(false);
     setSaving(false);
   };
 
   useEffect(() => {
-    if (!loading && !showConfigPanel && appliedConfig.tableId && result.buckets.length) {
+    if (!loading && !showConfigPanel && savedConfig.tableId && result.buckets.length) {
       const timer = window.setTimeout(() => {
         void markDashboardRendered();
       }, 800);
       return () => window.clearTimeout(timer);
     }
     return undefined;
-  }, [loading, showConfigPanel, appliedConfig.tableId, result.buckets.length]);
+  }, [loading, showConfigPanel, savedConfig.tableId, result.buckets.length]);
 
   const densityClass = !showConfigPanel && shellSize.height < 270 ? 'micro' : !showConfigPanel && shellSize.height < 390 ? 'compact' : '';
 
@@ -259,6 +285,7 @@ export function App() {
             <SummaryBar
               summary={result.summary}
               onShowExceptions={() => {
+                setTooltipResetSignal((value) => value + 1);
                 setShowExceptions(true);
                 setSelectedBucket(undefined);
               }}
@@ -266,20 +293,42 @@ export function App() {
           </div>
         </header>
 
+        <QuickFilterBar
+          fields={fields}
+          records={records}
+          config={draftConfig}
+          quickFilters={quickFilters}
+          onChange={(fieldId, values) => {
+            setTooltipResetSignal((value) => value + 1);
+            setSelectedBucket(undefined);
+            setShowExceptions(false);
+            setQuickFilters((current) => ({ ...current, [fieldId]: values }));
+          }}
+          onClear={() => {
+            setTooltipResetSignal((value) => value + 1);
+            setSelectedBucket(undefined);
+            setShowExceptions(false);
+            setQuickFilters({});
+          }}
+        />
+
         <section className="plugin-body heatmap-card">
           {loading ? (
             <div className="empty">正在读取多维表格数据...</div>
           ) : result.buckets.length ? (
             <Heatmap
               buckets={result.buckets}
-              config={appliedConfig}
+              config={draftConfig}
+              resetSignal={tooltipResetSignal}
+              detailOpen={Boolean(selectedBucket || showExceptions)}
               onSelect={(bucket) => {
+                setTooltipResetSignal((value) => value + 1);
                 setSelectedBucket(bucket);
                 setShowExceptions(false);
               }}
             />
           ) : (
-            <div className="empty">请选择数据表、开始日期、结束日期和计算字段。</div>
+            <div className="empty">请选择数据表、开始日期字段、结束日期字段和计算字段后生成热力图</div>
           )}
         </section>
       </main>

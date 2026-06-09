@@ -45,6 +45,7 @@ export interface HeatmapConfig {
   colorStops: ColorStop[];
   showLegend: boolean;
   showCellValue: boolean;
+  showQuickFilters: boolean;
   statusFilters: string[];
   ownerFilters: string[];
   groupFilters: string[];

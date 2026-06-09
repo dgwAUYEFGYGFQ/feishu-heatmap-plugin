@@ -14,6 +14,7 @@ export default defineConfig({
     allowedHosts: [
       'strongly-binding-helmet-matter.trycloudflare.com',
       'resolve-berlin-produce-munich.trycloudflare.com',
+      'commodity-shipment-tears-mustang.trycloudflare.com',
     ],
   },
 });
