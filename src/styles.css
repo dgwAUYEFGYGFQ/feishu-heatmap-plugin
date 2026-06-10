@@ -548,6 +548,16 @@ select {
   color: #4E5969;
   font-size: var(--heat-month-font-size, 13px);
   font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.month-total {
+  color: #86909C;
+  font-size: max(10px, calc(var(--heat-month-font-size, 13px) - 2px));
+  font-weight: 500;
 }
 
 .app-shell.config-collapsed.compact .month-label {

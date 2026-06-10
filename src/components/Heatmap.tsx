@@ -39,12 +39,13 @@ export function Heatmap({ buckets, config, onSelect, resetSignal, detailOpen }: 
     setLocked('');
   }, [resetSignal, buckets, config.tableId, config.startDateFieldId, config.endDateFieldId, config.valueFieldId, config.granularity, config.statisticMode]);
 
-  const grouped = buckets.reduce<Array<{ month: string; buckets: HeatmapBucket[] }>>((acc, bucket) => {
+  const grouped = buckets.reduce<Array<{ month: string; total: number; buckets: HeatmapBucket[] }>>((acc, bucket) => {
     const last = acc[acc.length - 1];
     if (last?.month === bucket.monthLabel) {
       last.buckets.push(bucket);
+      last.total += bucket.value;
     } else {
-      acc.push({ month: bucket.monthLabel, buckets: [bucket] });
+      acc.push({ month: bucket.monthLabel, total: bucket.value, buckets: [bucket] });
     }
     return acc;
   }, []);
@@ -148,7 +149,10 @@ export function Heatmap({ buckets, config, onSelect, resetSignal, detailOpen }: 
       >
         {grouped.map((group) => (
           <div className="month-group" key={group.month}>
-            <div className="month-label">{group.month}</div>
+            <div className="month-label">
+              <span>{group.month}</span>
+              <span className="month-total">总计 {formatValue(group.total)}</span>
+            </div>
             <div className={`heatmap-grid ${config.granularity === 'week' ? 'week-grid' : ''}`}>
               {group.buckets.map((bucket) => {
                 const level = getBucketLevel(bucket.value, config.colorStops);
