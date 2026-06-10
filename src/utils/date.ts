@@ -9,6 +9,12 @@ export const MONTH_FORMAT = 'YYYY-MM';
 export function toDateString(value: unknown): string {
   if (value === null || value === undefined || value === '') return '';
   if (typeof value === 'number') {
+    const raw = String(Math.trunc(value));
+    if (/^\d{10}$/.test(raw) || /^\d{13}$/.test(raw)) {
+      const timestamp = raw.length === 10 ? value * 1000 : value;
+      const timestampDate = dayjs(timestamp);
+      if (timestampDate.isValid() && timestampDate.year() > 1990) return timestampDate.format(DATE_FORMAT);
+    }
     const direct = dayjs(value);
     if (direct.isValid() && direct.year() > 1990) return direct.format(DATE_FORMAT);
     const excelLike = dayjs('1899-12-30').add(value, 'day');
@@ -23,7 +29,16 @@ export function toDateString(value: unknown): string {
   }
   if (typeof value === 'object') {
     const obj = value as Record<string, unknown>;
-    return toDateString(obj.timestamp ?? obj.date ?? obj.value ?? obj.text);
+    return toDateString(
+      obj.timestamp ??
+        obj.start_time ??
+        obj.startTime ??
+        obj.end_time ??
+        obj.endTime ??
+        obj.date ??
+        obj.value ??
+        obj.text,
+    );
   }
   return '';
 }

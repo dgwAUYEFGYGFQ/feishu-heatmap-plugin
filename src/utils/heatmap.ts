@@ -12,31 +12,146 @@ import type {
 import { buildDayRange, expandDateRange, getWeekRange, resolveDisplayRange, toDateString } from './date';
 import { getFieldDisplayValues, normalizeDisplayValue, uniqueSorted, valueToNumber, valueToText } from './value';
 
+const DEBUG_TIME_HEATMAP = true;
+
 function fieldOf(fields: FieldMeta[], fieldId?: string): FieldMeta | undefined {
   return fields.find((field) => field.id === fieldId);
 }
 
+function fieldDebugMeta(field?: FieldMeta) {
+  if (!field) return null;
+  return {
+    id: field.id,
+    name: field.name,
+    type: field.type,
+    kind: field.kind,
+    optionsCount: field.options?.length ?? 0,
+  };
+}
+
+function rawValueSummary(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '';
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value);
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function parseDateText(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '';
+  if (typeof value === 'number') {
+    const raw = String(Math.trunc(value));
+    if (/^\d{10}$/.test(raw) || /^\d{13}$/.test(raw)) {
+      const timestamp = raw.length === 10 ? value * 1000 : value;
+      const parsed = dayjs(timestamp);
+      return parsed.isValid() ? parsed.format('YYYY-MM-DD') : '';
+    }
+    return toDateString(value);
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return '';
+    if (/^\d{10}$/.test(trimmed) || /^\d{13}$/.test(trimmed)) {
+      return parseDateText(Number(trimmed));
+    }
+    const normalized = trimmed.replace(/\//g, '-');
+    const parsed = dayjs(normalized);
+    return parsed.isValid() ? parsed.format('YYYY-MM-DD') : '';
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const parsed = parseDateText(item);
+      if (parsed) return parsed;
+    }
+    return '';
+  }
+  if (typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    const candidates = [
+      obj.timestamp,
+      obj.start_time,
+      obj.startTime,
+      obj.end_time,
+      obj.endTime,
+      obj.date,
+      obj.value,
+      obj.text,
+      obj.name,
+    ];
+    for (const candidate of candidates) {
+      const parsed = parseDateText(candidate);
+      if (parsed) return parsed;
+    }
+  }
+  return '';
+}
+
+function parseDateCellValue(record: SourceRecord, fieldId: string, field?: FieldMeta): string {
+  const rawParsed = parseDateText(record.fields[fieldId]);
+  if (rawParsed) return rawParsed;
+  const displayParsed = parseDateText(record.displayFields?.[fieldId]);
+  if (displayParsed) return displayParsed;
+  const displayValues = getFieldDisplayValues(record, field);
+  for (const value of displayValues) {
+    const parsed = parseDateText(value);
+    if (parsed) return parsed;
+  }
+  return '';
+}
+
+function getDisplayText(record: SourceRecord, fieldId?: string, fields: FieldMeta[] = []): string {
+  if (!fieldId) return '';
+  const field = fieldOf(fields, fieldId);
+  return getFieldDisplayValues(record, field).join('、') || normalizeDisplayValue(record.fields[fieldId], field);
+}
+
+function buildDebugSample(record: SourceRecord, index: number, config: HeatmapConfig, fields: FieldMeta[]) {
+  const titleField = fieldOf(fields, config.titleFieldId);
+  const startField = fieldOf(fields, config.startDateFieldId);
+  const endField = fieldOf(fields, config.endDateFieldId);
+  return {
+    index,
+    recordId: record.id,
+    rawTitleValue: rawValueSummary(config.titleFieldId ? record.fields[config.titleFieldId] : undefined),
+    titleDisplay: getDisplayText(record, config.titleFieldId, fields),
+    rawTitleCellString: config.titleFieldId ? record.displayFields?.[config.titleFieldId] ?? '' : '',
+    rawStartValue: rawValueSummary(record.fields[config.startDateFieldId]),
+    startDisplay: getDisplayText(record, config.startDateFieldId, fields),
+    startCellString: record.displayFields?.[config.startDateFieldId] ?? '',
+    parsedStartDate: parseDateCellValue(record, config.startDateFieldId, startField),
+    rawEndValue: rawValueSummary(record.fields[config.endDateFieldId]),
+    endDisplay: getDisplayText(record, config.endDateFieldId, fields),
+    endCellString: record.displayFields?.[config.endDateFieldId] ?? '',
+    parsedEndDate: parseDateCellValue(record, config.endDateFieldId, endField),
+    rawValue: rawValueSummary(record.fields[config.valueFieldId]),
+    parsedValue: valueToNumber(record.fields[config.valueFieldId]),
+    titleFieldName: titleField?.name ?? '',
+  };
+}
+
 function normalizeRecord(record: SourceRecord, config: HeatmapConfig, fields: FieldMeta[] = []): NormalizedRecord {
-  const startDate = toDateString(record.fields[config.startDateFieldId]);
-  const endValue = toDateString(record.fields[config.endDateFieldId]);
+  const startField = fieldOf(fields, config.startDateFieldId);
+  const endField = fieldOf(fields, config.endDateFieldId);
+  const titleField = fieldOf(fields, config.titleFieldId);
+  const startDate = parseDateCellValue(record, config.startDateFieldId, startField);
+  const endValue = parseDateCellValue(record, config.endDateFieldId, endField);
   return {
     id: record.id,
-    title: config.titleFieldId ? normalizeDisplayValue(record.fields[config.titleFieldId], fieldOf(fields, config.titleFieldId)) || record.id : record.id,
+    title: config.titleFieldId ? getFieldDisplayValues(record, titleField).join('、') || normalizeDisplayValue(record.fields[config.titleFieldId], titleField) || record.id : record.id,
     startDate,
     endDate: endValue || startDate,
     value: valueToNumber(record.fields[config.valueFieldId]),
     status: config.statusFieldId ? getFieldDisplayValues(record, fieldOf(fields, config.statusFieldId)).join('、') : '',
     owner: config.ownerFieldId ? getFieldDisplayValues(record, fieldOf(fields, config.ownerFieldId)).join('、') : '',
     group: config.groupFieldId ? getFieldDisplayValues(record, fieldOf(fields, config.groupFieldId)).join('、') : '',
+    rawStartValue: record.fields[config.startDateFieldId] ?? record.displayFields?.[config.startDateFieldId],
+    rawEndValue: record.fields[config.endDateFieldId] ?? record.displayFields?.[config.endDateFieldId],
+    rawValue: record.fields[config.valueFieldId] ?? record.displayFields?.[config.valueFieldId],
+    rawTitleValue: config.titleFieldId ? record.fields[config.titleFieldId] ?? record.displayFields?.[config.titleFieldId] : undefined,
     raw: record,
   };
-}
-
-function passesFilters(record: NormalizedRecord, config: HeatmapConfig): boolean {
-  const statusOk = !config.statusFilters.length || config.statusFilters.includes(record.status);
-  const ownerOk = !config.ownerFilters.length || config.ownerFilters.includes(record.owner);
-  const groupOk = !config.groupFilters.length || config.groupFilters.includes(record.group);
-  return statusOk && ownerOk && groupOk;
 }
 
 function createEmptyDayBuckets(startDate: string, endDate: string): Map<string, HeatmapBucket> {
@@ -76,15 +191,39 @@ function createEmptyWeekBuckets(startDate: string, endDate: string): Map<string,
   return buckets;
 }
 
+function createException(record: NormalizedRecord, reason: string): ExceptionRecord {
+  return {
+    id: record.id,
+    title: record.title,
+    reason,
+    rawStartValue: record.rawStartValue,
+    rawEndValue: record.rawEndValue,
+    rawValue: record.rawValue,
+    fieldValues: {
+      start: rawValueSummary(record.rawStartValue),
+      end: rawValueSummary(record.rawEndValue),
+      value: rawValueSummary(record.rawValue),
+    },
+    debugValues: {
+      parsedStartDate: record.startDate || '-',
+      parsedEndDate: record.endDate || '-',
+      parsedValue: String(record.value),
+      rawTitleValue: rawValueSummary(record.rawTitleValue),
+      titleDisplay: record.title,
+    },
+    raw: record.raw,
+  };
+}
+
 function validateRecord(record: NormalizedRecord): ExceptionRecord | null {
   if (!record.startDate || !dayjs(record.startDate).isValid()) {
-    return { id: record.id, title: record.title, reason: '开始日期为空或格式无效', raw: record.raw };
+    return createException(record, '开始日期为空或格式无效');
   }
   if (!record.endDate || !dayjs(record.endDate).isValid()) {
-    return { id: record.id, title: record.title, reason: '结束日期格式无效', raw: record.raw };
+    return null;
   }
   if (dayjs(record.endDate).isBefore(dayjs(record.startDate), 'day')) {
-    return { id: record.id, title: record.title, reason: '结束日期早于开始日期', raw: record.raw };
+    return createException(record, '结束日期早于开始日期');
   }
   return null;
 }
@@ -99,6 +238,31 @@ function addDetail(bucket: HeatmapBucket, detail: AllocationDetail): void {
 }
 
 export function calculateHeatmap(records: SourceRecord[], config: HeatmapConfig, fields: FieldMeta[] = []): CalculationResult {
+  if (DEBUG_TIME_HEATMAP) {
+    console.log('[任务负荷热力图][DEBUG] 当前配置字段', {
+      tableId: config.tableId,
+      startDateFieldId: config.startDateFieldId,
+      endDateFieldId: config.endDateFieldId,
+      valueFieldId: config.valueFieldId,
+      titleFieldId: config.titleFieldId,
+      statusFieldId: config.statusFieldId,
+      ownerFieldId: config.ownerFieldId,
+      groupFieldId: config.groupFieldId,
+    });
+    console.log('[任务负荷热力图][DEBUG] 字段元信息', {
+      startDateField: fieldDebugMeta(fieldOf(fields, config.startDateFieldId)),
+      endDateField: fieldDebugMeta(fieldOf(fields, config.endDateFieldId)),
+      valueField: fieldDebugMeta(fieldOf(fields, config.valueFieldId)),
+      titleField: fieldDebugMeta(fieldOf(fields, config.titleFieldId)),
+      statusField: fieldDebugMeta(fieldOf(fields, config.statusFieldId)),
+      ownerField: fieldDebugMeta(fieldOf(fields, config.ownerFieldId)),
+      groupField: fieldDebugMeta(fieldOf(fields, config.groupFieldId)),
+    });
+    const sampleRecords = records.slice(0, 10).map((record, index) => buildDebugSample(record, index, config, fields));
+    console.table(sampleRecords);
+    console.log('[任务负荷热力图][DEBUG] 实际参与计算配置', config);
+  }
+
   const displayRange = resolveDisplayRange(config);
   const buckets =
     config.granularity === 'day'
@@ -109,22 +273,38 @@ export function calculateHeatmap(records: SourceRecord[], config: HeatmapConfig,
   const exceptions: ExceptionRecord[] = [];
   let calculatedRecords = 0;
   let totalLoad = 0;
+  let validStartDateCount = 0;
+  let validEndDateCount = 0;
+  let invalidEndDateCount = 0;
 
   for (const record of normalizedRecords) {
+    if (record.startDate) validStartDateCount += 1;
+    if (record.endDate) validEndDateCount += 1;
+    if (record.rawEndValue && !record.endDate) invalidEndDateCount += 1;
     const exception = validateRecord(record);
     if (exception) {
       exceptions.push(exception);
       continue;
     }
 
-    const allocationDates = expandDateRange(record.startDate, record.endDate, config.statisticMode === 'workday');
+    const taskStart = dayjs(record.startDate);
+    const taskEnd = dayjs(record.endDate);
+    const rangeStart = dayjs(displayRange.startDate);
+    const rangeEnd = dayjs(displayRange.endDate);
+    const activeStart = taskStart.isBefore(rangeStart, 'day') ? rangeStart.format('YYYY-MM-DD') : taskStart.format('YYYY-MM-DD');
+    const activeEnd = taskEnd.isAfter(rangeEnd, 'day') ? rangeEnd.format('YYYY-MM-DD') : taskEnd.format('YYYY-MM-DD');
+
+    if (dayjs(activeEnd).isBefore(dayjs(activeStart), 'day')) {
+      continue;
+    }
+
+    const allocationDates = expandDateRange(activeStart, activeEnd, config.statisticMode === 'workday');
     if (!allocationDates.length) {
-      exceptions.push({ id: record.id, title: record.title, reason: '日期区间内没有可统计日期', raw: record.raw });
+      exceptions.push(createException(record, '日期范围内没有可统计日期'));
       continue;
     }
 
     calculatedRecords += 1;
-    if (!passesFilters(record, config)) continue;
     totalLoad += record.value;
 
     const dailyValue = record.value / allocationDates.length;
@@ -143,6 +323,31 @@ export function calculateHeatmap(records: SourceRecord[], config: HeatmapConfig,
         dailyValue,
         bucketValue: dailyValue,
       });
+    }
+  }
+
+  if (DEBUG_TIME_HEATMAP) {
+    console.log('[任务负荷热力图] 日期解析汇总', {
+      totalRecords: records.length,
+      validStartDateCount,
+      invalidStartDateCount: records.length - validStartDateCount,
+      validEndDateCount,
+      invalidEndDateCount,
+      sampleInvalidRecords: exceptions.slice(0, 5).map((item) => ({
+        recordId: item.id,
+        title: item.title,
+        reason: item.reason,
+        rawStartValue: item.fieldValues?.start,
+        rawEndValue: item.fieldValues?.end,
+        rawValue: item.fieldValues?.value,
+      })),
+    });
+    const failedDateSamples = records
+      .map((record, index) => buildDebugSample(record, index, config, fields))
+      .filter((sample) => !sample.parsedStartDate || (sample.rawEndValue && !sample.parsedEndDate))
+      .slice(0, 10);
+    if (failedDateSamples.length) {
+      console.log('[任务负荷热力图][DEBUG] 日期解析失败样例', failedDateSamples);
     }
   }
 
@@ -170,10 +375,24 @@ export function calculateHeatmap(records: SourceRecord[], config: HeatmapConfig,
 
 export function getFilterOptions(records: SourceRecord[], config: HeatmapConfig, fields: FieldMeta[] = []): CalculationResult['filterOptions'] {
   const normalizedRecords = records.map((record) => normalizeRecord(record, config, fields));
+  const timeFilterFieldIds = config.timeFilterFieldIds?.length
+    ? config.timeFilterFieldIds
+    : ([config.statusFieldId, config.ownerFieldId, config.groupFieldId].filter(Boolean) as string[]);
+  const timeFilters = Array.from(new Set(timeFilterFieldIds))
+    .map((fieldId) => {
+      const field = fieldOf(fields, fieldId);
+      return {
+        fieldId,
+        fieldName: field?.name ?? '未知字段',
+        options: uniqueSorted(records.flatMap((record) => getFieldDisplayValues(record, field))),
+      };
+    })
+    .filter((item) => item.options.length > 0);
   return {
     statuses: uniqueSorted(normalizedRecords.map((record) => record.status)),
     owners: uniqueSorted(normalizedRecords.map((record) => record.owner)),
     groups: uniqueSorted(normalizedRecords.map((record) => record.group)),
+    timeFilters,
   };
 }
 

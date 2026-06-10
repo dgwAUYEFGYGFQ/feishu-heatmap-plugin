@@ -9,6 +9,11 @@ interface ConfigPanelProps {
     statuses: string[];
     owners: string[];
     groups: string[];
+    timeFilters?: Array<{
+      fieldId: string;
+      fieldName: string;
+      options: string[];
+    }>;
     matrixFilters?: Array<{
       fieldId: string;
       fieldName: string;
@@ -26,6 +31,26 @@ const monthCounts = [3, 6, 8, 12];
 
 function optionFields(fields: FieldMeta[], kinds?: FieldKind[]): FieldMeta[] {
   return kinds ? fields.filter((field) => kinds.includes(field.kind)) : fields;
+}
+
+function isPotentialNumericField(field: FieldMeta): boolean {
+  if (field.kind === 'number') return true;
+  if (field.kind === 'formula' || field.kind === 'other') {
+    return /人天|工时|负荷|数值|金额|数量|总计|合计|预估|估算|value|number|count|sum/i.test(field.name);
+  }
+  return /人天|工时|负荷|数值|金额|数量|总计|合计|预估|估算|value|number|count|sum/i.test(field.name);
+}
+
+function isPotentialDateField(field: FieldMeta): boolean {
+  if (field.kind === 'date') return true;
+  const rawMetaText = JSON.stringify({
+    type: field.type,
+    property: field.property,
+    rawMeta: field.rawMeta,
+  }).toLowerCase();
+  const hasDateFormatMeta = /date|datetime|timestamp|yyyy|month|day/.test(rawMetaText);
+  const hasDateName = /日期|时间|开始|结束|截止|月底|月末|计划|start|end|date|time/i.test(field.name);
+  return (field.kind === 'formula' || field.kind === 'other') && (hasDateFormatMeta || hasDateName);
 }
 
 function SelectField({
@@ -101,14 +126,28 @@ function CheckboxFilter({
 }
 
 export function ConfigPanel({ tables, fields, draftConfig, filterOptions, quickFilters, saving, onChange, onQuickFilterChange, onApply }: ConfigPanelProps) {
-  const dateFields = optionFields(fields, ['date']);
+  const dateFields = fields.filter(isPotentialDateField);
   const numberFields = optionFields(fields, ['number']);
-  const valueFields = numberFields.length ? numberFields : fields;
+  const valueFields = fields.filter(isPotentialNumericField);
+  const visibleValueFields = valueFields.length ? valueFields : fields;
   const isMatrix = draftConfig.heatmapType === 'matrix';
+  const timeFilterFieldIds = draftConfig.timeFilterFieldIds ?? [];
+  const addedTimeFilterFieldIds = new Set(timeFilterFieldIds);
+  const availableTimeFilterFields = fields.filter((field) => !addedTimeFilterFieldIds.has(field.id));
   const matrixDetailFields = draftConfig.matrixDetailFields ?? [];
   const addedDetailFieldIds = new Set(matrixDetailFields.map((item) => item.fieldId));
   const availableDetailFields = fields.filter((field) => !addedDetailFieldIds.has(field.id));
   const fieldNameOf = (fieldId: string) => fields.find((field) => field.id === fieldId)?.name ?? '未知字段';
+  const moveTimeFilterField = (index: number, direction: -1 | 1) => {
+    const nextIndex = index + direction;
+    if (nextIndex < 0 || nextIndex >= timeFilterFieldIds.length) return;
+    const nextFields = [...timeFilterFieldIds];
+    [nextFields[index], nextFields[nextIndex]] = [nextFields[nextIndex], nextFields[index]];
+    onChange({ timeFilterFieldIds: nextFields });
+  };
+  const removeTimeFilterField = (index: number) => {
+    onChange({ timeFilterFieldIds: timeFilterFieldIds.filter((_, itemIndex) => itemIndex !== index) });
+  };
   const updateMatrixDetailField = (index: number, patch: Partial<(typeof matrixDetailFields)[number]>) => {
     onChange({
       matrixDetailFields: matrixDetailFields.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)),
@@ -148,15 +187,15 @@ export function ConfigPanel({ tables, fields, draftConfig, filterOptions, quickF
           </select>
         </label>
         <div className="field-hint">
-          已读取 {fields.length} 个字段，其中日期字段 {dateFields.length} 个，数字字段 {numberFields.length} 个
+          已读取 {fields.length} 个字段，其中日期字段 {dateFields.length} 个，数字/可转数字字段 {valueFields.length || numberFields.length} 个
         </div>
         {!isMatrix && (
           <>
             <SelectField label="开始日期字段" value={draftConfig.startDateFieldId} options={dateFields} onChange={(value) => onChange({ startDateFieldId: value })} />
             <SelectField label="结束日期字段" value={draftConfig.endDateFieldId} options={dateFields} onChange={(value) => onChange({ endDateFieldId: value })} />
-            <SelectField label="计算字段" value={draftConfig.valueFieldId} options={valueFields} onChange={(value) => onChange({ valueFieldId: value })} />
-            {!numberFields.length && fields.length > 0 && (
-              <div className="field-hint warn">未识别到数字字段，计算字段暂时显示全部字段；请选择可转成数字的字段。</div>
+            <SelectField label="计算字段" value={draftConfig.valueFieldId} options={visibleValueFields} onChange={(value) => onChange({ valueFieldId: value })} />
+            {!valueFields.length && fields.length > 0 && (
+              <div className="field-hint warn">未识别到数字或可转数字字段，计算字段暂时显示全部字段；请选择可转成数字的字段。</div>
             )}
             <SelectField label="标题字段" value={draftConfig.titleFieldId} options={fields} optional onChange={(value) => onChange({ titleFieldId: value || undefined })} />
             <SelectField label="状态字段" value={draftConfig.statusFieldId} options={fields} optional onChange={(value) => onChange({ statusFieldId: value || undefined })} />
@@ -343,6 +382,57 @@ export function ConfigPanel({ tables, fields, draftConfig, filterOptions, quickF
         </label>
       </section>}
 
+      {!isMatrix && (
+        <section className="panel-section">
+          <div className="section-label">筛选字段</div>
+          <div className="field-hint">添加到这里的字段会出现在右侧筛选区；开启快捷筛选栏后，也会显示在顶部。</div>
+          <div className="matrix-detail-list">
+            {timeFilterFieldIds.map((fieldId, index) => (
+              <div className="matrix-detail-row" key={`${fieldId}-${index}`}>
+                <select
+                  value={fieldId}
+                  onChange={(event) => {
+                    const nextFieldId = event.target.value;
+                    if (!nextFieldId || addedTimeFilterFieldIds.has(nextFieldId)) return;
+                    onChange({ timeFilterFieldIds: timeFilterFieldIds.map((item, itemIndex) => (itemIndex === index ? nextFieldId : item)) });
+                  }}
+                >
+                  <option value={fieldId}>{fieldNameOf(fieldId)}</option>
+                  {availableTimeFilterFields.map((field) => (
+                    <option key={field.id} value={field.id}>
+                      {field.name}
+                    </option>
+                  ))}
+                </select>
+                <div className="matrix-detail-actions">
+                  <button type="button" disabled={index === 0} onClick={() => moveTimeFilterField(index, -1)}>上移</button>
+                  <button type="button" disabled={index === timeFilterFieldIds.length - 1} onClick={() => moveTimeFilterField(index, 1)}>下移</button>
+                  <button type="button" onClick={() => removeTimeFilterField(index)}>删除</button>
+                </div>
+              </div>
+            ))}
+          </div>
+          <label className="field">
+            <span>添加筛选字段</span>
+            <select
+              value=""
+              onChange={(event) => {
+                const fieldId = event.target.value;
+                if (!fieldId) return;
+                onChange({ timeFilterFieldIds: [...timeFilterFieldIds, fieldId] });
+              }}
+            >
+              <option value="">请选择要添加的字段</option>
+              {availableTimeFilterFields.map((field) => (
+                <option key={field.id} value={field.id}>
+                  {field.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        </section>
+      )}
+
       {isMatrix && (
         <section className="panel-section">
           <div className="section-label">显示设置</div>
@@ -381,27 +471,21 @@ export function ConfigPanel({ tables, fields, draftConfig, filterOptions, quickF
         </section>
       ) : (
         <section className="panel-section">
-          <CheckboxFilter
-            label="状态筛选"
-            values={draftConfig.statusFilters}
-            options={filterOptions.statuses}
-            emptyText={draftConfig.statusFieldId ? '当前字段没有可筛选值' : '请先选择状态字段'}
-            onChange={(statusFilters) => onChange({ statusFilters })}
-          />
-          <CheckboxFilter
-            label="负责人筛选"
-            values={draftConfig.ownerFilters}
-            options={filterOptions.owners}
-            emptyText={draftConfig.ownerFieldId ? '当前字段没有可筛选值' : '请先选择负责人字段'}
-            onChange={(ownerFilters) => onChange({ ownerFilters })}
-          />
-          <CheckboxFilter
-            label="分组筛选"
-            values={draftConfig.groupFilters}
-            options={filterOptions.groups}
-            emptyText={draftConfig.groupFieldId ? '当前字段没有可筛选值' : '请先选择分组字段'}
-            onChange={(groupFilters) => onChange({ groupFilters })}
-          />
+          <div className="section-label">筛选设置</div>
+          {filterOptions.timeFilters?.length ? (
+            filterOptions.timeFilters.map((filter) => (
+              <CheckboxFilter
+                key={filter.fieldId}
+                label={`${filter.fieldName}筛选`}
+                values={quickFilters[filter.fieldId] ?? []}
+                options={filter.options}
+                emptyText="当前字段没有可筛选值"
+                onChange={(values) => onQuickFilterChange(filter.fieldId, values)}
+              />
+            ))
+          ) : (
+            <div className="filter-empty">请先添加筛选字段</div>
+          )}
         </section>
       )}
 

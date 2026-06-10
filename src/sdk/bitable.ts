@@ -6,6 +6,7 @@ const DEBUG = false;
 type SdkTable = {
   getFieldMetaList?: () => Promise<Array<Record<string, unknown>>>;
   getRecordIdList?: () => Promise<string[]>;
+  getRecordList?: (params?: Record<string, unknown>) => Promise<unknown>;
   getCellValue?: (fieldId: string, recordId: string) => Promise<unknown>;
   getCellString?: (fieldId: string, recordId: string) => Promise<string>;
 };
@@ -174,10 +175,54 @@ export async function loadFields(tableId: string): Promise<FieldMeta[]> {
   }
 }
 
+function extractRecordId(record: unknown): string {
+  if (typeof record === 'string') return record;
+  if (!record || typeof record !== 'object') return '';
+  const obj = record as Record<string, unknown>;
+  return String(obj.recordId ?? obj.record_id ?? obj.id ?? '');
+}
+
+function extractRecordPage(response: unknown): { recordIds: string[]; hasMore: boolean; nextPageToken?: string } {
+  if (Array.isArray(response)) {
+    return { recordIds: response.map(extractRecordId).filter(Boolean), hasMore: false };
+  }
+  if (!response || typeof response !== 'object') {
+    return { recordIds: [], hasMore: false };
+  }
+  const obj = response as Record<string, unknown>;
+  const records = (obj.records ?? obj.items ?? obj.data ?? []) as unknown;
+  const recordIds = Array.isArray(records) ? records.map(extractRecordId).filter(Boolean) : [];
+  const nextPageToken = String(obj.nextPageToken ?? obj.next_page_token ?? obj.pageToken ?? obj.page_token ?? '');
+  const hasMore = Boolean(obj.hasMore ?? obj.has_more ?? nextPageToken);
+  return { recordIds, hasMore, nextPageToken: nextPageToken || undefined };
+}
+
+async function loadAllRecordIds(table: SdkTable): Promise<{ recordIds: string[]; pageCount: number }> {
+  if (table.getRecordList) {
+    const recordIds: string[] = [];
+    let pageToken = '';
+    let pageCount = 0;
+    for (let guard = 0; guard < 1000; guard += 1) {
+      const response = await table.getRecordList({ pageSize: 500, pageToken: pageToken || undefined });
+      const page = extractRecordPage(response);
+      pageCount += 1;
+      recordIds.push(...page.recordIds);
+      if (!page.hasMore || !page.nextPageToken || page.nextPageToken === pageToken) break;
+      pageToken = page.nextPageToken;
+    }
+    if (recordIds.length) {
+      return { recordIds: Array.from(new Set(recordIds)), pageCount };
+    }
+  }
+
+  const recordIds = (await table.getRecordIdList?.()) ?? [];
+  return { recordIds, pageCount: recordIds.length ? 1 : 0 };
+}
+
 export async function loadRecords(tableId: string, fields: FieldMeta[]): Promise<SourceRecord[]> {
   try {
     const table = (await bitable.base.getTableById(tableId)) as unknown as SdkTable;
-    const recordIds = (await table.getRecordIdList?.()) ?? [];
+    const { recordIds, pageCount } = await loadAllRecordIds(table);
     const records = await Promise.all(
       recordIds.map(async (recordId) => {
         const cellEntries = await Promise.all(
@@ -207,6 +252,11 @@ export async function loadRecords(tableId: string, fields: FieldMeta[]): Promise
         };
       }),
     );
+    console.log('[任务负荷热力图] records读取完成', {
+      tableId,
+      totalRecords: records.length,
+      pageCount,
+    });
     return records.length ? records : mockRecords;
   } catch {
     return mockRecords;

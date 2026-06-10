@@ -56,6 +56,7 @@ function createInitialConfig(tableId = ''): HeatmapConfig {
     showLegend: true,
     showCellValue: false,
     showQuickFilters: false,
+    timeFilterFieldIds: [],
     matrixRowGroupFieldId: undefined,
     matrixRowNameFieldId: undefined,
     matrixColumnFieldId: undefined,
@@ -78,6 +79,7 @@ function normalizeConfig(config: HeatmapConfig): HeatmapConfig {
     colorStops: config.colorStops?.length >= 5 ? config.colorStops : defaultColorStops,
     showCellValue: config.showCellValue ?? false,
     showQuickFilters: config.showQuickFilters ?? false,
+    timeFilterFieldIds: config.timeFilterFieldIds ?? [],
     matrixDelayedStatusValues: config.matrixDelayedStatusValues ?? [],
     matrixDetailFields: config.matrixDetailFields ?? [],
     matrixShowEmptyCells: config.matrixShowEmptyCells ?? true,
@@ -99,9 +101,32 @@ function uniqueDetailFields(items: Array<MatrixDetailFieldConfig | undefined>): 
   return result;
 }
 
+function isPotentialNumericField(field: FieldMeta): boolean {
+  if (field.kind === 'number') return true;
+  if (field.kind === 'formula' || field.kind === 'other') {
+    return /人天|工时|负荷|数值|金额|数量|总计|合计|预估|估算|value|number|count|sum/i.test(field.name);
+  }
+  return /人天|工时|负荷|数值|金额|数量|总计|合计|预估|估算|value|number|count|sum/i.test(field.name);
+}
+
+function isPotentialDateField(field: FieldMeta): boolean {
+  if (field.kind === 'date') return true;
+  const rawMetaText = JSON.stringify({
+    type: field.type,
+    property: field.property,
+    rawMeta: field.rawMeta,
+  }).toLowerCase();
+  const hasDateFormatMeta = /date|datetime|timestamp|yyyy|month|day/.test(rawMetaText);
+  const hasDateName = /日期|时间|开始|结束|截止|月底|月末|计划|start|end|date|time/i.test(field.name);
+  return (field.kind === 'formula' || field.kind === 'other') && (hasDateFormatMeta || hasDateName);
+}
+
 function inferConfig(fields: FieldMeta[], current: HeatmapConfig): HeatmapConfig {
-  const dateFields = fields.filter((field) => field.kind === 'date');
-  const numberField = fields.find((field) => field.kind === 'number');
+  const dateFields = fields.filter(isPotentialDateField);
+  const numericFields = fields.filter(isPotentialNumericField);
+  const preferredNumberField =
+    numericFields.find((field) => /总.*人天|人天.*预估|预估.*人天|总人天/i.test(field.name)) ??
+    numericFields.find((field) => /人天|工时|负荷|数值|value/i.test(field.name));
   const findByName = (pattern: RegExp) => fields.find((field) => pattern.test(field.name))?.id;
   const keepIfExists = (fieldId?: string) => (fieldId && fields.some((field) => field.id === fieldId) ? fieldId : undefined);
   const startDateFieldId = keepIfExists(current.startDateFieldId) || findByName(/开始|start/i) || dateFields[0]?.id || '';
@@ -123,15 +148,19 @@ function inferConfig(fields: FieldMeta[], current: HeatmapConfig): HeatmapConfig
     matrixStartDateFieldId ? { fieldId: matrixStartDateFieldId, showInDetail: true, enableFilter: false } : undefined,
     matrixEndDateFieldId ? { fieldId: matrixEndDateFieldId, showInDetail: true, enableFilter: false } : undefined,
   ]);
+  const existingTimeFilterFieldIds = (current.timeFilterFieldIds ?? []).filter((fieldId) => keepIfExists(fieldId));
+  const defaultTimeFilterFieldIds = [statusFieldId, ownerFieldId, keepIfExists(current.groupFieldId) || findByName(/分组|阶段|项目|group/i)]
+    .filter(Boolean) as string[];
   return {
     ...current,
     startDateFieldId,
     endDateFieldId,
-    valueFieldId: keepIfExists(current.valueFieldId) || findByName(/人天|工时|负荷|数值|value/i) || numberField?.id || '',
+    valueFieldId: keepIfExists(current.valueFieldId) || preferredNumberField?.id || findByName(/人天|工时|负荷|数值|value/i) || '',
     titleFieldId,
     statusFieldId,
     ownerFieldId,
     groupFieldId: keepIfExists(current.groupFieldId) || findByName(/分组|项目|group/i),
+    timeFilterFieldIds: existingTimeFilterFieldIds.length ? existingTimeFilterFieldIds : Array.from(new Set(defaultTimeFilterFieldIds)),
     matrixRowGroupFieldId: keepIfExists(current.matrixRowGroupFieldId),
     matrixRowNameFieldId: keepIfExists(current.matrixRowNameFieldId) || findByName(/议题|专题|名称|title/i),
     matrixColumnFieldId: keepIfExists(current.matrixColumnFieldId) || findByName(/系统|列|system/i),
@@ -142,13 +171,78 @@ function inferConfig(fields: FieldMeta[], current: HeatmapConfig): HeatmapConfig
 }
 
 function resetFieldsForTable(config: HeatmapConfig, tableId: string): HeatmapConfig {
+  if (config.heatmapType === 'time') {
+    return {
+      ...config,
+      tableId,
+      startDateFieldId: '',
+      endDateFieldId: '',
+      valueFieldId: '',
+      titleFieldId: undefined,
+      statusFieldId: undefined,
+      ownerFieldId: undefined,
+      groupFieldId: undefined,
+      timeFilterFieldIds: [],
+      statusFilters: [],
+      ownerFilters: [],
+      groupFilters: [],
+    };
+  }
+
   return {
     ...config,
     tableId,
+    matrixRowGroupFieldId: undefined,
+    matrixRowNameFieldId: undefined,
+    matrixColumnFieldId: undefined,
+    matrixDelayedStatusValues: [],
+    matrixStartDateFieldId: undefined,
+    matrixEndDateFieldId: undefined,
+    matrixDetailFields: [],
     statusFilters: [],
     ownerFilters: [],
     groupFilters: [],
   };
+}
+
+function hasField(fields: FieldMeta[], fieldId?: string): boolean {
+  return Boolean(fieldId && fields.some((field) => field.id === fieldId));
+}
+
+function hasRequiredTimeFields(fields: FieldMeta[], config: HeatmapConfig): boolean {
+  return hasField(fields, config.startDateFieldId) && hasField(fields, config.endDateFieldId) && hasField(fields, config.valueFieldId);
+}
+
+function sanitizeConfigForFields(fields: FieldMeta[], config: HeatmapConfig): HeatmapConfig {
+  if (!fields.length) return config;
+  const inferred = inferConfig(fields, config);
+  if (isSameConfig(config, inferred)) return config;
+  if (config.heatmapType === 'time') {
+    console.log('[任务负荷热力图][DEBUG] 字段配置已按当前数据表校正', {
+      tableId: config.tableId,
+      before: {
+        startDateFieldId: config.startDateFieldId,
+        endDateFieldId: config.endDateFieldId,
+        valueFieldId: config.valueFieldId,
+        titleFieldId: config.titleFieldId,
+        statusFieldId: config.statusFieldId,
+        ownerFieldId: config.ownerFieldId,
+        groupFieldId: config.groupFieldId,
+        timeFilterFieldIds: config.timeFilterFieldIds,
+      },
+      after: {
+        startDateFieldId: inferred.startDateFieldId,
+        endDateFieldId: inferred.endDateFieldId,
+        valueFieldId: inferred.valueFieldId,
+        titleFieldId: inferred.titleFieldId,
+        statusFieldId: inferred.statusFieldId,
+        ownerFieldId: inferred.ownerFieldId,
+        groupFieldId: inferred.groupFieldId,
+        timeFilterFieldIds: inferred.timeFilterFieldIds,
+      },
+    });
+  }
+  return inferred;
 }
 
 const emptyResult: CalculationResult = {
@@ -295,10 +389,13 @@ export function App() {
       const cachedFields = fieldsCacheRef.current.get(tableId);
       const cachedRecords = recordsCacheRef.current.get(tableId);
       if (cachedFields && cachedRecords) {
-        const inferred = inferConfig(cachedFields, draftConfig);
         setFields(cachedFields);
         setRecords(cachedRecords);
-        setDraftConfig(inferred);
+        setDraftConfig((current) => {
+          if (current.tableId !== tableId) return current;
+          const inferred = sanitizeConfigForFields(cachedFields, current);
+          return isSameConfig(current, inferred) ? current : inferred;
+        });
         setLoading(false);
         return;
       }
@@ -307,14 +404,17 @@ export function App() {
       try {
         const loadedFields = await loadFields(tableId);
         if (cancelled) return;
-        const inferred = inferConfig(loadedFields, draftConfig);
         const loadedRecords = loadedFields.length ? await loadRecords(tableId, loadedFields) : [];
         if (cancelled) return;
         fieldsCacheRef.current.set(tableId, loadedFields);
         recordsCacheRef.current.set(tableId, loadedRecords);
         setFields(loadedFields);
         setRecords(loadedRecords);
-        setDraftConfig(inferred);
+        setDraftConfig((current) => {
+          if (current.tableId !== tableId) return current;
+          const inferred = sanitizeConfigForFields(loadedFields, current);
+          return isSameConfig(current, inferred) ? current : inferred;
+        });
       } catch (error) {
         console.error('Failed to load table data', error);
       } finally {
@@ -326,6 +426,15 @@ export function App() {
       cancelled = true;
     };
   }, [draftConfig.tableId]);
+
+  useEffect(() => {
+    if (!fields.length) return;
+    setDraftConfig((current) => {
+      if (!current.tableId) return current;
+      const inferred = sanitizeConfigForFields(fields, current);
+      return isSameConfig(current, inferred) ? current : inferred;
+    });
+  }, [fields]);
 
   const changeDraft = (patch: Partial<HeatmapConfig>) => {
     setTooltipResetSignal((value) => value + 1);
@@ -340,6 +449,12 @@ export function App() {
       const statusFieldChanged = Object.prototype.hasOwnProperty.call(patch, 'statusFieldId');
       const ownerFieldChanged = Object.prototype.hasOwnProperty.call(patch, 'ownerFieldId');
       const groupFieldChanged = Object.prototype.hasOwnProperty.call(patch, 'groupFieldId');
+      if (patch.timeFilterFieldIds) {
+        const activeTimeFilterFieldIds = new Set(patch.timeFilterFieldIds);
+        setQuickFilters((quickCurrent) =>
+          Object.fromEntries(Object.entries(quickCurrent).filter(([fieldId]) => activeTimeFilterFieldIds.has(fieldId))),
+        );
+      }
       if (patch.matrixDetailFields) {
         const activeMatrixFilterFieldIds = new Set(patch.matrixDetailFields.filter((item) => item.enableFilter).map((item) => item.fieldId));
         setQuickFilters((quickCurrent) =>
@@ -361,23 +476,45 @@ export function App() {
     const activeFieldIds = new Set(
       draftConfig.heatmapType === 'matrix'
         ? (draftConfig.matrixDetailFields ?? []).filter((item) => item.enableFilter).map((item) => item.fieldId)
-        : ([draftConfig.statusFieldId, draftConfig.ownerFieldId, draftConfig.groupFieldId].filter(Boolean) as string[]),
+        : (draftConfig.timeFilterFieldIds?.length
+            ? draftConfig.timeFilterFieldIds
+            : ([draftConfig.statusFieldId, draftConfig.ownerFieldId, draftConfig.groupFieldId].filter(Boolean) as string[])),
     );
     setQuickFilters((current) =>
       Object.fromEntries(Object.entries(current).filter(([fieldId]) => activeFieldIds.has(fieldId))),
     );
-  }, [draftConfig.statusFieldId, draftConfig.ownerFieldId, draftConfig.groupFieldId, draftConfig.matrixDetailFields, draftConfig.heatmapType]);
+  }, [draftConfig.statusFieldId, draftConfig.ownerFieldId, draftConfig.groupFieldId, draftConfig.timeFilterFieldIds, draftConfig.matrixDetailFields, draftConfig.heatmapType]);
 
   const quickFilteredRecords = useMemo(
     () => filterRecordsByQuickFilters(records, quickFilters, fields),
     [fields, records, quickFilters],
   );
 
-  const previewRecords = draftConfig.heatmapType === 'matrix' || draftConfig.showQuickFilters ? quickFilteredRecords : records;
+  useEffect(() => {
+    if (draftConfig.heatmapType !== 'time') return;
+    const activeFilters = Object.fromEntries(Object.entries(quickFilters).filter(([, values]) => values.length > 0));
+    console.log('[任务负荷热力图] 筛选结果', {
+      beforeFilter: records.length,
+      afterFilter: quickFilteredRecords.length,
+      activeFilters,
+    });
+  }, [draftConfig.heatmapType, records.length, quickFilteredRecords.length, quickFilters]);
+
+  const previewRecords = quickFilteredRecords;
 
   const result = useMemo(() => {
     if (draftConfig.heatmapType === 'matrix') return emptyResult;
     if (!draftConfig.tableId || !draftConfig.startDateFieldId || !draftConfig.endDateFieldId || !draftConfig.valueFieldId) {
+      return emptyResult;
+    }
+    if (!hasRequiredTimeFields(fields, draftConfig)) {
+      console.log('[任务负荷热力图][DEBUG] 当前表缺少必需字段，跳过本次计算', {
+        tableId: draftConfig.tableId,
+        startDateFieldId: draftConfig.startDateFieldId,
+        endDateFieldId: draftConfig.endDateFieldId,
+        valueFieldId: draftConfig.valueFieldId,
+        fieldCount: fields.length,
+      });
       return emptyResult;
     }
     return calculateHeatmap(previewRecords, draftConfig, fields);
@@ -499,6 +636,9 @@ export function App() {
 
   const applyAndSave = async () => {
     setSaving(true);
+    if (draftConfig.heatmapType === 'time') {
+      console.log('[任务负荷热力图][DEBUG] 保存配置', draftConfig);
+    }
     await saveDashboardConfig(draftConfig);
     setSavedConfig(draftConfig);
     setShowConfigPanel(false);

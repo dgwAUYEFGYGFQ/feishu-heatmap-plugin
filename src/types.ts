@@ -61,6 +61,7 @@ export interface HeatmapConfig {
   showLegend: boolean;
   showCellValue: boolean;
   showQuickFilters: boolean;
+  timeFilterFieldIds: string[];
   matrixRowGroupFieldId?: string;
   matrixRowNameFieldId?: string;
   matrixColumnFieldId?: string;
@@ -84,6 +85,10 @@ export interface NormalizedRecord {
   status: string;
   owner: string;
   group: string;
+  rawStartValue?: unknown;
+  rawEndValue?: unknown;
+  rawValue?: unknown;
+  rawTitleValue?: unknown;
   raw: SourceRecord;
 }
 
@@ -107,6 +112,11 @@ export interface ExceptionRecord {
   id: string;
   title: string;
   reason: string;
+  rawStartValue?: unknown;
+  rawEndValue?: unknown;
+  rawValue?: unknown;
+  fieldValues?: Record<string, string>;
+  debugValues?: Record<string, string>;
   raw: SourceRecord;
 }
 
@@ -124,6 +134,11 @@ export interface CalculationResult {
     statuses: string[];
     owners: string[];
     groups: string[];
+    timeFilters?: Array<{
+      fieldId: string;
+      fieldName: string;
+      options: string[];
+    }>;
   };
 }
 

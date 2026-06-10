@@ -38,6 +38,22 @@ export function DetailDrawer({ bucket, matrixCell, exceptions, onClose }: Detail
               <div className="detail-card" key={item.id}>
                 <div className="detail-title">{item.title}</div>
                 <div className="detail-meta danger">{item.reason}</div>
+                <div className="detail-columns">
+                  <span>开始：{item.fieldValues?.start || '-'}</span>
+                  <span>结束：{item.fieldValues?.end || '-'}</span>
+                  <span>数值：{item.fieldValues?.value || '-'}</span>
+                </div>
+                <div className="detail-columns">
+                  <span>标题raw：{item.debugValues?.rawTitleValue || '-'}</span>
+                  <span>标题显示：{item.debugValues?.titleDisplay || item.title || '-'}</span>
+                  <span>解析数值：{item.debugValues?.parsedValue || '-'}</span>
+                </div>
+                <div className="detail-columns">
+                  <span>解析开始：{item.debugValues?.parsedStartDate || '-'}</span>
+                  <span>解析结束：{item.debugValues?.parsedEndDate || '-'}</span>
+                  <span>原因：{item.reason}</span>
+                </div>
+                <div className="detail-meta">recordId：{item.id}</div>
               </div>
             ))}
           </div>
