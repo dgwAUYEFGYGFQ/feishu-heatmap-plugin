@@ -10,6 +10,7 @@ import type {
   SourceRecord,
 } from '../types';
 import { buildDayRange, expandDateRange, getWeekRange, resolveDisplayRange, toDateString } from './date';
+import { BLANK_FILTER_VALUE } from './quickFilters';
 import { getFieldDisplayValues, normalizeDisplayValue, uniqueSorted, valueToNumber, valueToText } from './value';
 
 const DEBUG_TIME_HEATMAP = true;
@@ -101,6 +102,18 @@ function parseDateCellValue(record: SourceRecord, fieldId: string, field?: Field
   return '';
 }
 
+function parseNumberCellValue(record: SourceRecord, fieldId: string, field?: FieldMeta): number {
+  const displayText = record.displayFields?.[fieldId];
+  if (displayText && (field?.kind === 'formula' || field?.kind === 'other')) {
+    return valueToNumber(displayText);
+  }
+  const displayValues = field ? getFieldDisplayValues(record, field) : [];
+  if (displayValues.length && (field?.kind === 'formula' || field?.kind === 'other')) {
+    return valueToNumber(displayValues[0]);
+  }
+  return valueToNumber(record.fields[fieldId]);
+}
+
 function getDisplayText(record: SourceRecord, fieldId?: string, fields: FieldMeta[] = []): string {
   if (!fieldId) return '';
   const field = fieldOf(fields, fieldId);
@@ -111,6 +124,7 @@ function buildDebugSample(record: SourceRecord, index: number, config: HeatmapCo
   const titleField = fieldOf(fields, config.titleFieldId);
   const startField = fieldOf(fields, config.startDateFieldId);
   const endField = fieldOf(fields, config.endDateFieldId);
+  const valueField = fieldOf(fields, config.valueFieldId);
   return {
     index,
     recordId: record.id,
@@ -126,7 +140,8 @@ function buildDebugSample(record: SourceRecord, index: number, config: HeatmapCo
     endCellString: record.displayFields?.[config.endDateFieldId] ?? '',
     parsedEndDate: parseDateCellValue(record, config.endDateFieldId, endField),
     rawValue: rawValueSummary(record.fields[config.valueFieldId]),
-    parsedValue: valueToNumber(record.fields[config.valueFieldId]),
+    valueCellString: record.displayFields?.[config.valueFieldId] ?? '',
+    parsedValue: parseNumberCellValue(record, config.valueFieldId, valueField),
     titleFieldName: titleField?.name ?? '',
   };
 }
@@ -135,6 +150,7 @@ function normalizeRecord(record: SourceRecord, config: HeatmapConfig, fields: Fi
   const startField = fieldOf(fields, config.startDateFieldId);
   const endField = fieldOf(fields, config.endDateFieldId);
   const titleField = fieldOf(fields, config.titleFieldId);
+  const valueField = fieldOf(fields, config.valueFieldId);
   const startDate = parseDateCellValue(record, config.startDateFieldId, startField);
   const endValue = parseDateCellValue(record, config.endDateFieldId, endField);
   return {
@@ -142,13 +158,13 @@ function normalizeRecord(record: SourceRecord, config: HeatmapConfig, fields: Fi
     title: config.titleFieldId ? getFieldDisplayValues(record, titleField).join('、') || normalizeDisplayValue(record.fields[config.titleFieldId], titleField) || record.id : record.id,
     startDate,
     endDate: endValue || startDate,
-    value: valueToNumber(record.fields[config.valueFieldId]),
+    value: parseNumberCellValue(record, config.valueFieldId, valueField),
     status: config.statusFieldId ? getFieldDisplayValues(record, fieldOf(fields, config.statusFieldId)).join('、') : '',
     owner: config.ownerFieldId ? getFieldDisplayValues(record, fieldOf(fields, config.ownerFieldId)).join('、') : '',
     group: config.groupFieldId ? getFieldDisplayValues(record, fieldOf(fields, config.groupFieldId)).join('、') : '',
     rawStartValue: record.fields[config.startDateFieldId] ?? record.displayFields?.[config.startDateFieldId],
     rawEndValue: record.fields[config.endDateFieldId] ?? record.displayFields?.[config.endDateFieldId],
-    rawValue: record.fields[config.valueFieldId] ?? record.displayFields?.[config.valueFieldId],
+    rawValue: record.displayFields?.[config.valueFieldId] ?? record.fields[config.valueFieldId],
     rawTitleValue: config.titleFieldId ? record.fields[config.titleFieldId] ?? record.displayFields?.[config.titleFieldId] : undefined,
     raw: record,
   };
@@ -381,10 +397,12 @@ export function getFilterOptions(records: SourceRecord[], config: HeatmapConfig,
   const timeFilters = Array.from(new Set(timeFilterFieldIds))
     .map((fieldId) => {
       const field = fieldOf(fields, fieldId);
+      const values = records.flatMap((record) => getFieldDisplayValues(record, field));
+      const hasBlank = records.some((record) => getFieldDisplayValues(record, field).length === 0);
       return {
         fieldId,
         fieldName: field?.name ?? '未知字段',
-        options: uniqueSorted(records.flatMap((record) => getFieldDisplayValues(record, field))),
+        options: hasBlank ? [...uniqueSorted(values), BLANK_FILTER_VALUE] : uniqueSorted(values),
       };
     })
     .filter((item) => item.options.length > 0);

@@ -1,5 +1,6 @@
 import type { FieldMeta, HeatmapConfig, MatrixCell, MatrixColumn, MatrixDetailFieldConfig, MatrixHeatmapData, MatrixRecordDetail, MatrixRow, SourceRecord } from '../types';
 import { toDateString } from './date';
+import { BLANK_FILTER_VALUE } from './quickFilters';
 import { getFieldDisplayValues, uniqueSorted } from './value';
 
 function fieldOf(fields: FieldMeta[], fieldId?: string): FieldMeta | undefined {
@@ -121,10 +122,12 @@ export function getMatrixFilterOptions(records: SourceRecord[], config: HeatmapC
     .filter((item) => item.enableFilter)
     .map((item) => {
       const field = fieldOf(fields, item.fieldId);
+      const values = records.flatMap((record) => getFieldDisplayValues(record, field));
+      const hasBlank = records.some((record) => getFieldDisplayValues(record, field).length === 0);
       return {
         fieldId: item.fieldId,
         fieldName: field?.name ?? '未知字段',
-        options: uniqueSorted(records.flatMap((record) => getFieldDisplayValues(record, field))),
+        options: hasBlank ? [...uniqueSorted(values), BLANK_FILTER_VALUE] : uniqueSorted(values),
       };
     })
     .filter((item) => item.options.length > 0);

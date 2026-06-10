@@ -204,8 +204,11 @@ export function valueToNumber(value: unknown): number {
   if (value === null || value === undefined || value === '') return 0;
   if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
   if (typeof value === 'string') {
-    const parsed = Number(value.replace(/,/g, ''));
-    return Number.isFinite(parsed) ? parsed : 0;
+    const normalized = value.replace(/,/g, '').trim();
+    const parsed = Number(normalized);
+    if (Number.isFinite(parsed)) return parsed;
+    const matched = normalized.match(/-?\d+(?:\.\d+)?/);
+    return matched ? Number(matched[0]) : 0;
   }
   if (Array.isArray(value)) return valueToNumber(value[0]);
   if (typeof value === 'object') {

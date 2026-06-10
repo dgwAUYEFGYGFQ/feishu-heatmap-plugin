@@ -87,8 +87,8 @@ function shouldReadCellString(value: unknown): boolean {
 }
 
 function shouldAlwaysReadCellString(field: FieldMeta, value: unknown): boolean {
-  if (!containsInternalReference(value)) return false;
-  return field.kind === 'link' || field.kind === 'formula';
+  if (field.kind === 'link' || field.kind === 'formula' || field.kind === 'other') return true;
+  return containsInternalReference(value);
 }
 
 function parseMaybeJsonObject(value: unknown): Record<string, unknown> {
