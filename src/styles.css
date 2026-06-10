@@ -260,7 +260,7 @@ select {
 
 .quick-filter-bar {
   position: relative;
-  z-index: 5;
+  z-index: 80;
   display: flex;
   flex: 0 0 auto;
   flex-wrap: wrap;
@@ -309,7 +309,7 @@ select {
   position: absolute;
   top: calc(100% + 6px);
   left: 0;
-  z-index: 20;
+  z-index: 100;
   width: 260px;
   padding: 12px;
   border: 1px solid #DEE0E3;
@@ -474,6 +474,8 @@ select {
 }
 
 .heatmap-card {
+  position: relative;
+  z-index: 1;
   flex: 1 1 auto;
   min-height: 0;
   width: 100%;
