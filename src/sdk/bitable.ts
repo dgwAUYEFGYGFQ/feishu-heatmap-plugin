@@ -11,6 +11,11 @@ type SdkTable = {
   getCellString?: (fieldId: string, recordId: string) => Promise<string>;
 };
 
+interface LoadRecordsOptions {
+  preferCellString?: boolean;
+  skipPageRecordList?: boolean;
+}
+
 function fieldTypeToKind(type: unknown): FieldKind {
   const raw = String(type).toLowerCase();
   if (
@@ -182,19 +187,87 @@ function extractRecordId(record: unknown): string {
   return String(obj.recordId ?? obj.record_id ?? obj.id ?? '');
 }
 
-function extractRecordPage(response: unknown): { recordIds: string[]; hasMore: boolean; nextPageToken?: string } {
+function extractRecordFields(record: unknown): Record<string, unknown> {
+  if (!record || typeof record !== 'object') return {};
+  const obj = record as Record<string, unknown>;
+  const fields = obj.fields ?? obj.fieldValues ?? obj.field_values ?? obj.recordFields ?? obj.record_fields;
+  return fields && typeof fields === 'object' && !Array.isArray(fields) ? (fields as Record<string, unknown>) : {};
+}
+
+function extractDisplayFields(record: unknown, fields: FieldMeta[]): Record<string, string> {
+  if (!record || typeof record !== 'object') return {};
+  const obj = record as Record<string, unknown>;
+  const source = obj.displayFields ?? obj.display_fields ?? obj.fieldStringValues ?? obj.field_string_values ?? obj.cellStringValues ?? obj.cell_string_values;
+  if (source && typeof source === 'object' && !Array.isArray(source)) {
+    return Object.fromEntries(
+      Object.entries(source as Record<string, unknown>)
+        .map(([fieldId, value]) => [fieldId, typeof value === 'string' ? value : ''])
+        .filter(([, value]) => value),
+    );
+  }
+
+  const rawFields = extractRecordFields(record);
+  return Object.fromEntries(
+    fields
+      .map((field) => {
+        const rawValue = rawFields[field.id];
+        if (typeof rawValue === 'string' && !/^(opt|rec|fld)[A-Za-z0-9_-]+$/.test(rawValue)) return [field.id, rawValue] as const;
+        return [field.id, ''] as const;
+      })
+      .filter(([, value]) => value),
+  );
+}
+
+function extractRecordPage(response: unknown): { rawRecords: unknown[]; recordIds: string[]; hasMore: boolean; nextPageToken?: string } {
   if (Array.isArray(response)) {
-    return { recordIds: response.map(extractRecordId).filter(Boolean), hasMore: false };
+    return { rawRecords: response, recordIds: response.map(extractRecordId).filter(Boolean), hasMore: false };
   }
   if (!response || typeof response !== 'object') {
-    return { recordIds: [], hasMore: false };
+    return { rawRecords: [], recordIds: [], hasMore: false };
   }
   const obj = response as Record<string, unknown>;
-  const records = (obj.records ?? obj.items ?? obj.data ?? []) as unknown;
+  const dataObj = obj.data && typeof obj.data === 'object' && !Array.isArray(obj.data) ? (obj.data as Record<string, unknown>) : undefined;
+  const records = (obj.records ?? obj.items ?? dataObj?.records ?? dataObj?.items ?? obj.data ?? []) as unknown;
+  const rawRecords = Array.isArray(records) ? records : [];
   const recordIds = Array.isArray(records) ? records.map(extractRecordId).filter(Boolean) : [];
-  const nextPageToken = String(obj.nextPageToken ?? obj.next_page_token ?? obj.pageToken ?? obj.page_token ?? '');
-  const hasMore = Boolean(obj.hasMore ?? obj.has_more ?? nextPageToken);
-  return { recordIds, hasMore, nextPageToken: nextPageToken || undefined };
+  const nextPageToken = String(obj.nextPageToken ?? obj.next_page_token ?? obj.pageToken ?? obj.page_token ?? dataObj?.nextPageToken ?? dataObj?.next_page_token ?? '');
+  const hasMore = Boolean(obj.hasMore ?? obj.has_more ?? dataObj?.hasMore ?? dataObj?.has_more ?? nextPageToken);
+  return { rawRecords, recordIds, hasMore, nextPageToken: nextPageToken || undefined };
+}
+
+async function loadRecordsByPage(table: SdkTable, fields: FieldMeta[]): Promise<{ records: SourceRecord[]; pageCount: number } | null> {
+  if (!table.getRecordList) return null;
+
+  const records: SourceRecord[] = [];
+  let pageToken = '';
+  let pageCount = 0;
+  for (let guard = 0; guard < 1000; guard += 1) {
+    const response = await table.getRecordList({ pageSize: 500, pageToken: pageToken || undefined });
+    const page = extractRecordPage(response);
+    pageCount += 1;
+    if (pageCount === 1 && !page.rawRecords.some((record) => Object.keys(extractRecordFields(record)).length > 0)) {
+      return null;
+    }
+    const pageRecords = page.rawRecords
+      .map((record) => {
+        const id = extractRecordId(record);
+        const rawFields = extractRecordFields(record);
+        if (!id || !Object.keys(rawFields).length) return null;
+        return {
+          id,
+          fields: rawFields,
+          displayFields: extractDisplayFields(record, fields),
+        };
+      })
+      .filter(Boolean) as SourceRecord[];
+    records.push(...pageRecords);
+    if (!page.hasMore || !page.nextPageToken || page.nextPageToken === pageToken) break;
+    pageToken = page.nextPageToken;
+  }
+
+  if (!records.length) return null;
+  const uniqueRecords = Array.from(new Map(records.map((record) => [record.id, record])).values());
+  return { records: uniqueRecords, pageCount };
 }
 
 async function loadAllRecordIds(table: SdkTable): Promise<{ recordIds: string[]; pageCount: number }> {
@@ -220,13 +293,40 @@ async function loadAllRecordIds(table: SdkTable): Promise<{ recordIds: string[];
 }
 
 export async function loadRecords(tableId: string, fields: FieldMeta[]): Promise<SourceRecord[]> {
+  return loadRecordsWithOptions(tableId, fields);
+}
+
+export async function loadRecordsWithOptions(tableId: string, fields: FieldMeta[], options: LoadRecordsOptions = {}): Promise<SourceRecord[]> {
   try {
     const table = (await bitable.base.getTableById(tableId)) as unknown as SdkTable;
+    const start = performance.now();
+    const pageResult = options.skipPageRecordList ? null : await loadRecordsByPage(table, fields);
+    if (pageResult) {
+      console.log('[任务负荷热力图] records读取完成', {
+        tableId,
+        totalRecords: pageResult.records.length,
+        pageCount: pageResult.pageCount,
+        mode: 'page',
+        readMs: Math.round(performance.now() - start),
+      });
+      return pageResult.records.length ? pageResult.records : mockRecords;
+    }
+
     const { recordIds, pageCount } = await loadAllRecordIds(table);
     const records = await Promise.all(
       recordIds.map(async (recordId) => {
         const cellEntries = await Promise.all(
           fields.map(async (field) => {
+            if (options.preferCellString && table.getCellString) {
+              try {
+                const displayText = await table.getCellString(field.id, recordId);
+                return [field.id, displayText, displayText] as const;
+              } catch (error) {
+                if (DEBUG) {
+                  console.warn('[任务负荷热力图] getCellString 读取失败', { tableId, recordId, field, error });
+                }
+              }
+            }
             const rawValue = await table.getCellValue?.(field.id, recordId);
             let displayText = '';
             if (table.getCellString && (shouldAlwaysReadCellString(field, rawValue) || shouldReadCellString(rawValue))) {
@@ -256,6 +356,8 @@ export async function loadRecords(tableId: string, fields: FieldMeta[]): Promise
       tableId,
       totalRecords: records.length,
       pageCount,
+      mode: 'cell',
+      readMs: Math.round(performance.now() - start),
     });
     return records.length ? records : mockRecords;
   } catch {

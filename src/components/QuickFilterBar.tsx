@@ -8,6 +8,10 @@ interface QuickFilterBarProps {
   fields: FieldMeta[];
   records: SourceRecord[];
   config: HeatmapConfig;
+  filterOptions?: {
+    timeFilters?: Array<{ fieldId: string; fieldName: string; options: string[] }>;
+    matrixFilters?: Array<{ fieldId: string; fieldName: string; options: string[] }>;
+  };
   quickFilters: QuickFilters;
   onChange: (fieldId: string, values: string[]) => void;
   onClear: () => void;
@@ -27,7 +31,7 @@ function formatChipLabel(fieldName: string, selectedValues: string[]): string {
   return `${fieldName}：已选 ${selectedValues.length} 项`;
 }
 
-export function QuickFilterBar({ fields, records, config, quickFilters, onChange, onClear }: QuickFilterBarProps) {
+export function QuickFilterBar({ fields, records, config, filterOptions, quickFilters, onChange, onClear }: QuickFilterBarProps) {
   const [openFieldId, setOpenFieldId] = useState('');
   const [searchText, setSearchText] = useState('');
   const [draftValues, setDraftValues] = useState<string[]>([]);
@@ -35,6 +39,13 @@ export function QuickFilterBar({ fields, records, config, quickFilters, onChange
 
   const fieldMap = useMemo(() => new Map(fields.map((field) => [field.id, field])), [fields]);
   const filterItems = useMemo<FilterItem[]>(() => {
+    const precomputed = config.heatmapType === 'matrix' ? filterOptions?.matrixFilters : filterOptions?.timeFilters;
+    if (precomputed?.length) {
+      return precomputed.map((item) => ({
+        ...item,
+        selectedValues: quickFilters[item.fieldId] ?? [],
+      }));
+    }
     const configs = config.heatmapType === 'matrix'
       ? (config.matrixDetailFields ?? []).filter((item) => item.enableFilter).map((item) => item.fieldId)
       : (config.timeFilterFieldIds?.length
@@ -55,7 +66,7 @@ export function QuickFilterBar({ fields, records, config, quickFilters, onChange
         };
       })
       .filter(Boolean) as FilterItem[];
-  }, [config.groupFieldId, config.heatmapType, config.matrixDetailFields, config.ownerFieldId, config.statusFieldId, config.timeFilterFieldIds, fieldMap, fields, quickFilters, records]);
+  }, [config.groupFieldId, config.heatmapType, config.matrixDetailFields, config.ownerFieldId, config.statusFieldId, config.timeFilterFieldIds, fieldMap, fields, filterOptions?.matrixFilters, filterOptions?.timeFilters, quickFilters, records]);
 
   const activeItem = filterItems.find((item) => item.fieldId === openFieldId);
   const visibleOptions = useMemo(() => {

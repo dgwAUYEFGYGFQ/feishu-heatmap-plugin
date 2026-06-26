@@ -7,7 +7,7 @@ import { Heatmap } from './components/Heatmap';
 import { MatrixHeatmap } from './components/MatrixHeatmap';
 import { QuickFilterBar } from './components/QuickFilterBar';
 import { SummaryBar } from './components/SummaryBar';
-import { loadFields, loadRecords, loadTables } from './sdk/bitable';
+import { loadFields, loadRecords, loadRecordsWithOptions, loadTables } from './sdk/bitable';
 import {
   isDashboardConfigMode,
   loadDashboardConfig,
@@ -18,7 +18,12 @@ import {
 } from './sdk/dashboard';
 import type { CalculationResult, FieldMeta, HeatmapBucket, HeatmapConfig, MatrixCell, MatrixDetailFieldConfig, MatrixHeatmapData, SourceRecord, TableMeta } from './types';
 import { calculateHeatmap, getFilterOptions } from './utils/heatmap';
-import { buildMatrixHeatmapData, getMatrixFilterOptions } from './utils/matrixHeatmap';
+import {
+  buildMatrixHeatmapDataFromNormalized,
+  filterNormalizedMatrixRecords,
+  getMatrixFilterOptionsFromNormalized,
+  normalizeMatrixRecords,
+} from './utils/matrixHeatmap';
 import type { QuickFilters } from './utils/quickFilters';
 import { filterRecordsByQuickFilters } from './utils/quickFilters';
 import { getFieldDisplayValues } from './utils/value';
@@ -245,6 +250,43 @@ function sanitizeConfigForFields(fields: FieldMeta[], config: HeatmapConfig): He
   return inferred;
 }
 
+function getRecordFieldsForConfig(fields: FieldMeta[], config: HeatmapConfig): FieldMeta[] {
+  if (config.heatmapType !== 'matrix') return fields;
+  const fieldIds = new Set(
+    [
+      config.matrixRowGroupFieldId,
+      config.matrixRowNameFieldId,
+      config.matrixColumnFieldId,
+      config.statusFieldId,
+      config.ownerFieldId,
+      config.matrixStartDateFieldId,
+      config.matrixEndDateFieldId,
+      ...(config.matrixDetailFields ?? []).map((item) => item.fieldId),
+    ].filter(Boolean) as string[],
+  );
+  return fields.filter((field) => fieldIds.has(field.id));
+}
+
+function mergeRecords(existing: SourceRecord[], incoming: SourceRecord[]): SourceRecord[] {
+  const map = new Map(existing.map((record) => [record.id, record]));
+  for (const record of incoming) {
+    const current = map.get(record.id);
+    map.set(record.id, {
+      ...current,
+      ...record,
+      fields: {
+        ...(current?.fields ?? {}),
+        ...record.fields,
+      },
+      displayFields: {
+        ...(current?.displayFields ?? {}),
+        ...(record.displayFields ?? {}),
+      },
+    });
+  }
+  return Array.from(map.values());
+}
+
 const emptyResult: CalculationResult = {
   buckets: [],
   summary: { totalRecords: 0, totalLoad: 0, calculatedRecords: 0, exceptionRecords: [] },
@@ -309,11 +351,25 @@ function isSameConfig(a: HeatmapConfig, b: HeatmapConfig): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
+function useDebouncedValue<T>(value: T, delay: number): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    if (delay <= 0) {
+      setDebounced(value);
+      return undefined;
+    }
+    const timer = window.setTimeout(() => setDebounced(value), delay);
+    return () => window.clearTimeout(timer);
+  }, [delay, value]);
+  return debounced;
+}
+
 export function App() {
   const shellRef = useRef<HTMLDivElement>(null);
   const tablesCacheRef = useRef<TableMeta[] | null>(null);
   const fieldsCacheRef = useRef(new Map<string, FieldMeta[]>());
   const recordsCacheRef = useRef(new Map<string, SourceRecord[]>());
+  const loadedRecordFieldIdsRef = useRef(new Map<string, Set<string>>());
   const [tables, setTables] = useState<TableMeta[]>([]);
   const [fields, setFields] = useState<FieldMeta[]>([]);
   const [records, setRecords] = useState<SourceRecord[]>([]);
@@ -404,15 +460,19 @@ export function App() {
       try {
         const loadedFields = await loadFields(tableId);
         if (cancelled) return;
-        const loadedRecords = loadedFields.length ? await loadRecords(tableId, loadedFields) : [];
+        const inferred = sanitizeConfigForFields(loadedFields, draftConfig);
+        const recordFields = getRecordFieldsForConfig(loadedFields, inferred);
+        const loadedRecords = recordFields.length
+          ? await loadRecordsWithOptions(tableId, recordFields, { preferCellString: inferred.heatmapType === 'matrix', skipPageRecordList: inferred.heatmapType === 'matrix' })
+          : [];
         if (cancelled) return;
         fieldsCacheRef.current.set(tableId, loadedFields);
         recordsCacheRef.current.set(tableId, loadedRecords);
+        loadedRecordFieldIdsRef.current.set(tableId, new Set(recordFields.map((field) => field.id)));
         setFields(loadedFields);
         setRecords(loadedRecords);
         setDraftConfig((current) => {
           if (current.tableId !== tableId) return current;
-          const inferred = sanitizeConfigForFields(loadedFields, current);
           return isSameConfig(current, inferred) ? current : inferred;
         });
       } catch (error) {
@@ -426,6 +486,57 @@ export function App() {
       cancelled = true;
     };
   }, [draftConfig.tableId]);
+
+  useEffect(() => {
+    if (draftConfig.heatmapType !== 'matrix' || !draftConfig.tableId || !fields.length) return;
+    const tableId = draftConfig.tableId;
+    const neededFields = getRecordFieldsForConfig(fields, draftConfig);
+    const loadedFieldIds = loadedRecordFieldIdsRef.current.get(tableId) ?? new Set<string>();
+    const missingFields = neededFields.filter((field) => !loadedFieldIds.has(field.id));
+    if (!missingFields.length) return;
+
+    let cancelled = false;
+    async function loadMissingMatrixFields() {
+      try {
+        const start = performance.now();
+        const partialRecords = await loadRecordsWithOptions(tableId, missingFields, { preferCellString: true, skipPageRecordList: true });
+        if (cancelled) return;
+        const currentRecords = recordsCacheRef.current.get(tableId) ?? records;
+        const merged = mergeRecords(currentRecords, partialRecords);
+        recordsCacheRef.current.set(tableId, merged);
+        const nextLoadedFieldIds = new Set(loadedRecordFieldIdsRef.current.get(tableId) ?? []);
+        missingFields.forEach((field) => nextLoadedFieldIds.add(field.id));
+        loadedRecordFieldIdsRef.current.set(tableId, nextLoadedFieldIds);
+        setRecords(merged);
+        console.log('[矩阵热力图性能]', {
+          loadMissingFieldsMs: Math.round(performance.now() - start),
+          missingFieldCount: missingFields.length,
+          recordsCount: merged.length,
+        });
+      } catch (error) {
+        console.error('Failed to load matrix fields', error);
+      }
+    }
+
+    void loadMissingMatrixFields();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    draftConfig.heatmapType,
+    draftConfig.tableId,
+    draftConfig.matrixRowGroupFieldId,
+    draftConfig.matrixRowNameFieldId,
+    draftConfig.matrixColumnFieldId,
+    draftConfig.statusFieldId,
+    draftConfig.titleFieldId,
+    draftConfig.ownerFieldId,
+    draftConfig.matrixStartDateFieldId,
+    draftConfig.matrixEndDateFieldId,
+    draftConfig.matrixDetailFields,
+    fields,
+    records,
+  ]);
 
   useEffect(() => {
     if (!fields.length) return;
@@ -485,10 +596,11 @@ export function App() {
     );
   }, [draftConfig.statusFieldId, draftConfig.ownerFieldId, draftConfig.groupFieldId, draftConfig.timeFilterFieldIds, draftConfig.matrixDetailFields, draftConfig.heatmapType]);
 
-  const quickFilteredRecords = useMemo(
-    () => filterRecordsByQuickFilters(records, quickFilters, fields),
-    [fields, records, quickFilters],
-  );
+  const quickFilteredRecords = useMemo(() => {
+    if (draftConfig.heatmapType === 'matrix') return records;
+    return filterRecordsByQuickFilters(records, quickFilters, fields);
+  }, [draftConfig.heatmapType, fields, records, quickFilters]);
+  const debouncedMatrixQuickFilters = useDebouncedValue(quickFilters, draftConfig.heatmapType === 'matrix' ? 200 : 0);
 
   useEffect(() => {
     if (draftConfig.heatmapType !== 'time') return;
@@ -500,7 +612,7 @@ export function App() {
     });
   }, [draftConfig.heatmapType, records.length, quickFilteredRecords.length, quickFilters]);
 
-  const previewRecords = quickFilteredRecords;
+  const previewRecords = draftConfig.heatmapType === 'matrix' ? records : quickFilteredRecords;
 
   const result = useMemo(() => {
     if (draftConfig.heatmapType === 'matrix') return emptyResult;
@@ -520,6 +632,41 @@ export function App() {
     return calculateHeatmap(previewRecords, draftConfig, fields);
   }, [fields, previewRecords, draftConfig]);
 
+  const normalizedMatrixRecords = useMemo(() => {
+    if (
+      draftConfig.heatmapType !== 'matrix' ||
+      !draftConfig.tableId ||
+      !draftConfig.matrixRowNameFieldId ||
+      !draftConfig.matrixColumnFieldId ||
+      !draftConfig.statusFieldId
+    ) {
+      return [];
+    }
+    const start = performance.now();
+    const normalized = normalizeMatrixRecords(records, draftConfig, fields);
+    const end = performance.now();
+    console.log('[矩阵热力图性能]', {
+      normalizeRecordsMs: Math.round(end - start),
+      recordsCount: records.length,
+    });
+    return normalized;
+  }, [
+    draftConfig.heatmapType,
+    draftConfig.tableId,
+    draftConfig.matrixRowGroupFieldId,
+    draftConfig.matrixRowNameFieldId,
+    draftConfig.matrixColumnFieldId,
+    draftConfig.statusFieldId,
+    draftConfig.matrixDelayedStatusValues,
+    draftConfig.matrixDetailFields,
+    draftConfig.titleFieldId,
+    draftConfig.ownerFieldId,
+    draftConfig.matrixStartDateFieldId,
+    draftConfig.matrixEndDateFieldId,
+    fields,
+    records,
+  ]);
+
   const matrixData = useMemo(() => {
     if (
       draftConfig.heatmapType !== 'matrix' ||
@@ -530,13 +677,44 @@ export function App() {
     ) {
       return emptyMatrixData;
     }
-    return buildMatrixHeatmapData(previewRecords, draftConfig, fields);
-  }, [fields, previewRecords, draftConfig]);
+    const start = performance.now();
+    const filtered = filterNormalizedMatrixRecords(normalizedMatrixRecords, debouncedMatrixQuickFilters);
+    const afterFilter = performance.now();
+    const data = buildMatrixHeatmapDataFromNormalized(filtered, draftConfig);
+    const afterBuild = performance.now();
+    console.log('[矩阵热力图性能]', {
+      applyFiltersMs: Math.round(afterFilter - start),
+      buildMatrixMs: Math.round(afterBuild - afterFilter),
+      renderRowsCount: data.rows.length,
+      renderColumnsCount: data.columns.length,
+      recordsCount: normalizedMatrixRecords.length,
+      filteredRecordsCount: filtered.length,
+    });
+    return data;
+  }, [
+    debouncedMatrixQuickFilters,
+    draftConfig.heatmapType,
+    draftConfig.tableId,
+    draftConfig.matrixRowNameFieldId,
+    draftConfig.matrixColumnFieldId,
+    draftConfig.statusFieldId,
+    draftConfig.matrixShowEmptyCells,
+    normalizedMatrixRecords,
+  ]);
 
-  const draftFilterOptions = useMemo(
-    () => (draftConfig.heatmapType === 'matrix' ? getMatrixFilterOptions(records, draftConfig, fields) : getFilterOptions(records, draftConfig, fields)),
-    [fields, records, draftConfig, draftConfig.heatmapType],
-  );
+  const draftFilterOptions = useMemo(() => {
+    if (draftConfig.heatmapType === 'matrix') {
+      const start = performance.now();
+      const options = getMatrixFilterOptionsFromNormalized(normalizedMatrixRecords, draftConfig, fields);
+      const end = performance.now();
+      console.log('[矩阵热力图性能]', {
+        buildFilterOptionsMs: Math.round(end - start),
+        recordsCount: normalizedMatrixRecords.length,
+      });
+      return options;
+    }
+    return getFilterOptions(records, draftConfig, fields);
+  }, [draftConfig, fields, normalizedMatrixRecords, records]);
 
   useEffect(() => {
     if (
@@ -733,6 +911,7 @@ export function App() {
           fields={fields}
           records={records}
           config={draftConfig}
+          filterOptions={draftFilterOptions}
           quickFilters={quickFilters}
           onChange={changeQuickFilter}
           onClear={clearQuickFilters}
